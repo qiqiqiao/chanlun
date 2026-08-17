@@ -395,6 +395,8 @@
   // 暗色主题
   // ---------------------------------------------------------------------------
   function darkStyles() {
+    // 纯绿：K线阳线 / VOL / MACD 柱统一（#00ff00）
+    const GREEN = '#00ff00'
     return {
       grid: {
         horizontal: { show: true, color: 'rgba(255,255,255,0.06)', size: 1 },
@@ -402,13 +404,13 @@
       },
       candle: {
         bar: {
-          upColor: '#26a69a',
+          upColor: GREEN,
           downColor: '#ef5350',
           noChangeColor: '#8a8a8a',
-          upBorderColor: '#26a69a',
+          upBorderColor: GREEN,
           downBorderColor: '#ef5350',
           noChangeBorderColor: '#8a8a8a',
-          upWickColor: '#26a69a',
+          upWickColor: GREEN,
           downWickColor: '#ef5350',
           noChangeWickColor: '#8a8a8a'
         },
@@ -417,12 +419,16 @@
           low: { show: true, color: 'rgba(255,255,255,0.4)', textOffset: 5, textSize: 10 },
           last: {
             show: true,
-            upColor: '#26a69a',
+            upColor: GREEN,
             downColor: '#ef5350',
             noChangeColor: '#8a8a8a',
             line: { show: true, color: 'rgba(255,255,255,0.25)', style: 'dashed', size: 1, dashValue: [3, 3] }
           }
         }
+      },
+      // VOL / MACD 柱子颜色（klinecharts 读取 styles.indicator.bars[0].upColor/downColor）
+      indicator: {
+        bars: [{ upColor: GREEN }]
       },
       xAxis: {
         axisLine: { color: 'rgba(255,255,255,0.15)', size: 1 },

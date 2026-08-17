@@ -1,5 +1,5 @@
 :root {
-  --bg: #0d1117;
+  --bg: #000000;
   --bg-panel: #161b22;
   --bg-hover: #1f2630;
   --border: #2a3140;
@@ -173,6 +173,7 @@ main {
 #chart {
   position: absolute;
   inset: 0;
+  background: #000000; /* K线背景纯黑 */
 }
 
 /* 加载遮罩 */
@@ -184,7 +185,7 @@ main {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  background: rgba(13, 17, 23, 0.6);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 10;
   font-size: 13px;
   color: var(--text-dim);
@@ -230,7 +231,7 @@ main {
   padding: 4px 10px;
   font-size: 11px;
   color: var(--text-dim);
-  background: rgba(13, 17, 23, 0.8);
+  background: rgba(0, 0, 0, 0.8);
   border-top: 1px solid var(--border);
   pointer-events: none;
   z-index: 5;
