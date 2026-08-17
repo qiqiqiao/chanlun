@@ -26,6 +26,7 @@ index.html     脚本按依赖顺序加载（无构建步骤）
    ├─ data-layer.test.js    数据层单元测试（假 fetch/WS/定时器）
    ├─ realtime.test.js    实时更新策略（P0：对象复用场景回归）
    ├─ realtime-stress.test.js   5000 K 实时链路压测（原地跳动/收盘/新K，逐 tick 与全量一致）
+   ├─ draw.test.js    绘制可见窗口过滤回归（线段中枢横跨左边界漏画修复）
    ├─ exchange-adapters.test.js   Binance/OKX 适配器契约 + 分页集成（vm 加载真实 main.js）
    ├─ live-network.test.js  真实网络压测（LIVE_NETWORK=1 启用，默认跳过）
    └─ browser-smoke.test.js 浏览器装配冒烟（vm 模拟，验证 index.html 脚本路径）
@@ -52,7 +53,7 @@ barSignature(bar) = timestamp|open|high|low|close|volume|isBarClosed
 ## 运行测试
 
 ```bash
-node tests/run.js            # 全部测试（87 项，不含真实网络）
+node tests/run.js            # 全部测试（92 项，不含真实网络）
 LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js   # 真实 Binance/OKX 链路压测
 node tests/run.js tests/segment-edge.test.js   # 单文件
 ```

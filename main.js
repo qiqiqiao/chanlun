@@ -279,6 +279,36 @@
     ctx.strokeRect(x, y, w, Math.max(0, h))
   }
 
+  // 二分查找：首个 getKey(element) >= v 的下标（数组按 getKey 单调递增）
+  function lowerBound(arr, getKey, v) {
+    let lo = 0
+    let hi = arr.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (getKey(arr[mid]) < v) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
+
+  // 可见窗口 [from, to] 内应绘制的元素：起点 <= to 且终点 >= from。
+  // 关键：二分按起点定位会漏掉「起点 < from 但终点 >= from」的元素
+  // （横跨窗口左边界）。线段中枢通常只有 1~2 个，一旦横跨左边界就整体
+  // 消失（笔中枢遍布全数据所以不明显）。修复：二分定位后前补一个元素。
+  // 前提：起点单调递增、元素不重叠（中枢不重叠；笔/线段首尾相连），
+  // 因此最多只有一个元素横跨左边界。
+  function visibleInRange(arr, startKey, endKey, from, to) {
+    let i = lowerBound(arr, startKey, from)
+    if (i > 0 && endKey(arr[i - 1]) >= from) i--
+    const result = []
+    for (; i < arr.length && startKey(arr[i]) <= to; i++) {
+      const el = arr[i]
+      if (endKey(el) < from) continue
+      result.push(el)
+    }
+    return result
+  }
+
   function drawChan({ ctx, chart, indicator, bounding, xAxis, yAxis }) {
     if (!chanState) return true
     const opts = state.chanOptions
@@ -289,40 +319,19 @@
     const X = (rawIndex) => xAxis.convertToPixel(rawIndex)
     const Y = (value) => yAxis.convertToPixel(value)
 
-    // 用二分查找把遍历限定在可见窗口 [from, to] 内（O(log N + K)，K=可见元素数）。
-    // 元素按 getKey 单调递增。lowerBound = 首个 key >= v 的下标。
-    const lowerBound = (arr, getKey, v) => {
-      let lo = 0, hi = arr.length
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1
-        if (getKey(arr[mid]) < v) lo = mid + 1
-        else hi = mid
-      }
-      return lo
-    }
-
-    // 1. 中枢（垫底）     按 startRaw 二分
+    // 1. 中枢（垫底）
     if (opts.segmentCenter) {
-      const arr = chanState.segmentCenters
-      let i = lowerBound(arr, (c) => c.startRaw, from)
-      for (; i < arr.length && arr[i].startRaw <= to; i++) {
-        const c = arr[i]
-        // 相交即绘制（startRaw <= to 已保证；endRaw < from 的跳过）
-        if (c.endRaw < from) continue
-        const x = X(c.startRaw) - halfGapBar
-        const w = X(c.endRaw) - X(c.startRaw) + gapBar
-        drawCenterRect(ctx, x, Y(c.zsHigh), w, Y(c.zsLow) - Y(c.zsHigh), COLORS.segmentCenter, COLORS.segmentCenterBorder)
+      for (const cc of visibleInRange(chanState.segmentCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
+        const x = X(cc.startRaw) - halfGapBar
+        const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
+        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), COLORS.segmentCenter, COLORS.segmentCenterBorder)
       }
     }
     if (opts.strokeCenter) {
-      const arr = chanState.strokeCenters
-      let i = lowerBound(arr, (c) => c.startRaw, from)
-      for (; i < arr.length && arr[i].startRaw <= to; i++) {
-        const c = arr[i]
-        if (c.endRaw < from) continue
-        const x = X(c.startRaw) - halfGapBar
-        const w = X(c.endRaw) - X(c.startRaw) + gapBar
-        drawCenterRect(ctx, x, Y(c.zsHigh), w, Y(c.zsLow) - Y(c.zsHigh), COLORS.strokeCenter, COLORS.strokeCenterBorder)
+      for (const cc of visibleInRange(chanState.strokeCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
+        const x = X(cc.startRaw) - halfGapBar
+        const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
+        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), COLORS.strokeCenter, COLORS.strokeCenterBorder)
       }
     }
 
@@ -330,11 +339,7 @@
     if (opts.segment) {
       ctx.lineWidth = 2
       ctx.strokeStyle = COLORS.segment
-      const arr = chanState.segments
-      let i = lowerBound(arr, (s) => s.fromRaw, from)
-      for (; i < arr.length && arr[i].fromRaw <= to; i++) {
-        const seg = arr[i]
-        if (seg.toRaw < from) continue
+      for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
         ctx.beginPath()
         ctx.moveTo(X(seg.fromRaw), Y(seg.dir === 'up' ? seg.from.low : seg.from.high))
         ctx.lineTo(X(seg.toRaw), Y(seg.dir === 'up' ? seg.to.high : seg.to.low))
@@ -345,11 +350,7 @@
     // 3. 笔
     if (opts.stroke) {
       ctx.lineWidth = 1.4
-      const arr = chanState.strokes
-      let i = lowerBound(arr, (s) => s.fromRaw, from)
-      for (; i < arr.length && arr[i].fromRaw <= to; i++) {
-        const s = arr[i]
-        if (s.toRaw < from) continue
+      for (const s of visibleInRange(chanState.strokes, (st) => st.fromRaw, (st) => st.toRaw, from, to)) {
         ctx.strokeStyle = s.dir === 'up' ? COLORS.strokeUp : COLORS.strokeDown
         ctx.beginPath()
         ctx.moveTo(X(s.fromRaw), Y(s.fromValue))
@@ -732,6 +733,9 @@
       klineCache,
       buildDataLoader,
       runChanCalc,
+      lowerBound,
+      visibleInRange,
+      drawChan,
       get chanState() {
         return chanState
       }
