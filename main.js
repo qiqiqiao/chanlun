@@ -395,8 +395,8 @@
   // 暗色主题
   // ---------------------------------------------------------------------------
   function darkStyles() {
-    // 纯绿：K线阳线 / VOL / MACD 柱统一（#00ff00）
-    const GREEN = '#00ff00'
+    // 柔和纯绿：K线阳线 / VOL / MACD 柱统一（纯绿色相 #00cc00，亮度 80%，避免 #00ff00 刺眼）
+    const GREEN = '#00cc00'
     return {
       grid: {
         horizontal: { show: true, color: 'rgba(255,255,255,0.06)', size: 1 },
