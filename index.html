@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>缠论图表 · Chanlun Chart</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>缠论<span>图表</span></h1>
+      <span class="subtitle">分型 · 笔 · 线段 · 中枢</span>
+    </div>
+    <div class="controls">
+      <div class="row">
+        <select id="exchange" title="数据源">
+          <option value="binance">Binance</option>
+          <option value="okx">OKX</option>
+        </select>
+        <input id="symbol" type="text" value="BTCUSDT" spellcheck="false" autocomplete="off" placeholder="如 BTCUSDT">
+        <button id="go" class="btn primary">分析</button>
+        <div id="quick-symbols" class="chips">
+          <button class="chip" data-symbol="BTCUSDT">BTCUSDT</button>
+          <button class="chip" data-symbol="ETHUSDT">ETHUSDT</button>
+          <button class="chip" data-symbol="SOLUSDT">SOLUSDT</button>
+          <button class="chip" data-symbol="BNBUSDT">BNBUSDT</button>
+          <button class="chip" data-symbol="DOGEUSDT">DOGEUSDT</button>
+        </div>
+      </div>
+      <div class="row">
+        <div id="periods" class="chips">
+          <button class="chip" data-period="1m">1m</button>
+          <button class="chip" data-period="5m">5m</button>
+          <button class="chip" data-period="15m">15m</button>
+          <button class="chip" data-period="30m">30m</button>
+          <button class="chip" data-period="1h">1h</button>
+          <button class="chip" data-period="4h">4h</button>
+          <button class="chip" data-period="1d">1d</button>
+          <button class="chip" data-period="1w">1w</button>
+        </div>
+        <div class="toggles">
+          <label><input type="checkbox" id="tg-fractal" checked> 分型</label>
+          <label><input type="checkbox" id="tg-stroke" checked> 笔</label>
+          <label><input type="checkbox" id="tg-segment" checked> 线段</label>
+          <label><input type="checkbox" id="tg-segcenter" checked> 线段中枢</label>
+          <label><input type="checkbox" id="tg-strcenter"> 笔中枢</label>
+          <label><input type="checkbox" id="tg-volume" checked> 交易量</label>
+          <label><input type="checkbox" id="tg-macd" checked> MACD</label>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div id="chart"></div>
+    <div id="loading" class="overlay hidden"><div class="spinner"></div><span>数据加载中…</span></div>
+    <div id="toast" class="toast hidden"></div>
+    <footer id="status" class="statusbar"></footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/klinecharts@10.0.2/dist/umd/klinecharts.min.js"></script>
+  <!-- 缠论算法模块（依赖顺序：config → merge → fractal → stroke → segment → center → analyzer → 装配） -->
+  <script src="src/config.js"></script>
+  <script src="src/merge.js"></script>
+  <script src="src/fractal.js"></script>
+  <script src="src/stroke.js"></script>
+  <script src="src/segment.js"></script>
+  <script src="src/center.js"></script>
+  <script src="src/analyzer.js"></script>
+  <script src="chanlun.js"></script>
+  <!-- 可靠数据层（缓存/重试/重连/加载器） -->
+  <script src="data-layer.js"></script>
+  <!-- 实时行情更新策略（内容签名判末根变化） -->
+  <script src="realtime.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
