@@ -22,10 +22,14 @@
  * 而真正的旧线段特征元素（新线段方向的笔）在待确认期间被跳过、丢失了。
  * 特征序列被污染/缺失会导致顶底分型漏判或误判（线段终点漂移）。
  *
- * 正确做法（本实现）：被否定时把待确认期间“被跳过的笔”按正常分支重放——
- * 旧线段方向的笔进特征序列（并立即做分型/缺口判断），新线段方向的笔跳过；
- * 与“该缺口分型从未发生”等价。触发该分型的笔已在特征序列中、不重放，
- * 因此不会再次进入同一个第二种情况（链式缺口场景由后续重放自然覆盖）。
+ * 正确做法（本实现）：被否定时把待确认期间处理过的笔全部按正常分支重放——
+ * 旧线段特征方向的笔进特征序列（并立即做分型/缺口判断），线段方向的笔跳过；
+ * 与“该缺口分型从未发生”等价。回退点固定为“触发分型的笔之后”
+ * （进入 pending 时记为 pending.replayFrom），不能用
+ * `j - pendingBuffer.length` 之类的估算：当待确认期间两种方向的笔交错出现时，
+ * 该式会落在部分已被缓冲的笔之后，导致这些笔被永久跳过、线段终点漂移。
+ * 触发该分型的笔已在特征序列中、不重放，因此不会再次进入同一个
+ * 第二种情况；重放点随触发点单调前移，不会死循环。
  * ────────────────────────────────────────────────────────────────
  */
 (function (global) {
@@ -92,9 +96,8 @@
 
     let segDir = strokes[segStart].dir
     let features = [] // 当前线段的特征序列（标准特征序列）
-    let pending = null // 第二种情况的待确认点 { strokeIndex, newDir }
+    let pending = null // 第二种情况的待确认点 { strokeIndex, newDir, replayFrom }
     let pendingFeatures = [] // 新线段的特征序列
-    let pendingBuffer = [] // 待确认期间被跳过的新线段方向笔（否定时按正常分支重放）
     let j = segStart + 1
 
     // 从特征分型的中间元素取线段终点（上下线段都是该元素起点处为极值点）
@@ -109,8 +112,7 @@
       // ---- 第二种情况：正在等待新线段特征序列的分型确认 ----
       if (pending) {
         if (s.dir === pending.newDir) {
-          // 新线段方向的笔：既可能是旧线段特征序列的延续（否定时需重放），先记录
-          pendingBuffer.push(s)
+          // 新线段方向的笔：否定时由 replayFrom 处的重放统一处理
           j++
           continue
         }
@@ -119,14 +121,13 @@
           ? s.high > strokes[pending.strokeIndex].from.high
           : s.low < strokes[pending.strokeIndex].from.low
         if (negExtreme) {
-          // 待确认点被否定，原线段继续：重放待确认期间被跳过的笔。
+          // 待确认点被否定，原线段继续：回到触发笔之后完整重放。
           // 触发分型的笔已在 features 中（不重放），避免再次进入同一分型；
           // 重放会重新做分型/缺口判断，等价于“该缺口分型从未发生”。
-          const replayFrom = j - pendingBuffer.length
+          const back = pending.replayFrom
           pending = null
           pendingFeatures = []
-          pendingBuffer = []
-          j = replayFrom
+          j = back
           continue
         }
         // 新线段的特征元素（方向与 newDir 相反，即与 segDir 相同）
@@ -165,7 +166,6 @@
           features = []
           pending = null
           pendingFeatures = []
-          pendingBuffer = []
           j = segStart + 1
           continue
         }
@@ -205,10 +205,9 @@
           j = segStart + 1
           continue
         } else {
-          // 第二种情况：进入待确认状态
-          pending = { strokeIndex: f1.strokeIndex, newDir: strokes[f1.strokeIndex].dir }
+          // 第二种情况：进入待确认状态（replayFrom = 触发笔之后，否定时完整重放）
+          pending = { strokeIndex: f1.strokeIndex, newDir: strokes[f1.strokeIndex].dir, replayFrom: j + 1 }
           pendingFeatures = []
-          pendingBuffer = []
           j++
           continue
         }

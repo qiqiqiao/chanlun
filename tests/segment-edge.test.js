@@ -12,6 +12,7 @@
 'use strict'
 const { randStrokes } = require('./helpers')
 const c = require('../chanlun.js')
+const segment = require('../src/segment.js')
 const assert = require('assert')
 const t = (name, fn) => global.__registerTest('segment-edge: ' + name, fn)
 
@@ -35,12 +36,14 @@ const sig = (r) => JSON.stringify({
 
 // ---------------------------------------------------------------------------
 // 回归：旧版否定逻辑（concat pendingFeatures）导致线段终点漂移的用例
-// 这些种子的预期值 = 教科书正确行为（否定时重放待确认期间笔），
-// 由差分探针验证：旧实现输出分别为 [9,44,79] / [15,42] / [11,32,49,54,57,64] 附近。
+// 预期值 = 教科书正确行为（否定时从触发笔之后完整重放）。
+// 注：seed 145 的预期值在 2026-08 修正过一次——旧断言把“重放丢交错笔”
+// bug 的输出（up:0-75）锁成了预期；正确行为是在 si=9 处识别真顶
+// （特征序列重放出无缺口顶分型），线段应终结于 raw=45。
 // ---------------------------------------------------------------------------
 const REGRESSION = [
   { seed: 52, n: 92, sis: [9, 34, 79], segs: ['up:0-45F', 'down:45-170F', 'up:170-395F', 'down:395-460O'] },
-  { seed: 145, n: 65, sis: [15, 42], segs: ['up:0-75F', 'down:75-210F', 'up:210-325O'] },
+  { seed: 145, n: 65, sis: [9, 12, 19, 42], segs: ['up:0-45F', 'down:45-60F', 'up:60-95F', 'down:95-210F', 'up:210-325O'] },
   { seed: 209, n: 69, sis: [11, 32, 49, 54, 57, 64], segs: ['down:0-55F', 'up:55-160F', 'down:160-245F', 'up:245-270F', 'down:270-285F', 'up:285-320F', 'down:320-345O'] }
 ]
 
@@ -150,6 +153,90 @@ t('第二种情况：否定后旧线段继续并正确终结于后续顶分型',
   assert.deepStrictEqual(r.confirmedSis, [9])
   assert.strictEqual(r.segments[1].dir, 'down')
   assert.strictEqual(r.segments[1].finished, false)
+})
+
+// ---------------------------------------------------------------------------
+// 回归：否定重放必须回到“触发笔之后”（待确认期两方向笔交错时旧版丢笔）
+// 旧版用 j - pendingBuffer.length 估算回退点：当缓冲笔在前、线段方向笔
+// （未创新极值的候选元素）在后时，回退点越过部分缓冲笔 → 这些笔被永久
+// 跳过、特征序列缺元素 → 线段终点漂移（seed 2/20/62 可复现，62 最明显：
+// 多条线段被合并成一条）。正确语义 = 否定时从触发笔之后完整重放，
+// 等价于“该缺口分型从未发生”。
+// ---------------------------------------------------------------------------
+t('回归：否定重放不丢交错笔（完整重放语义）', () => {
+  // 锁定种子：与参考实现（进入 pending 时记录触发笔之后的位置）逐位一致
+  for (const { seed, n } of [{ seed: 2, n: 80 }, { seed: 7, n: 80 }, { seed: 20, n: 40 }, { seed: 62, n: 80 }, { seed: 70, n: 80 }]) {
+    const strokes = randStrokes(n, seed)
+    const r = c.segmentScan(strokes, 0)
+    // 参考实现：与 segmentScan 相同，仅否定分支的回退点固定为“触发笔之后”
+    const refScan = (strokes2, segStart) => {
+      const segments = []
+      const nn = strokes2.length
+      let segDir = strokes2[segStart].dir
+      let features = []
+      let pending = null
+      let pendingFeatures = []
+      const ep = (si) => strokes2[si].fromRaw
+      let j = segStart + 1
+      while (j < nn) {
+        const s = strokes2[j]
+        if (pending) {
+          if (s.dir === pending.newDir) { j++; continue }
+          const negExtreme = segDir === 'up'
+            ? s.high > strokes2[pending.strokeIndex].from.high
+            : s.low < strokes2[pending.strokeIndex].from.low
+          if (negExtreme) {
+            const back = pending.replayFrom
+            pending = null; pendingFeatures = []
+            j = back
+            continue
+          }
+          segment.pushFeature(pendingFeatures, s, pending.newDir)
+          const pF = segment.findFeatureFractal(pendingFeatures, pending.newDir)
+          if (pF) {
+            segments.push({ dir: segDir, fromRaw: strokes2[segStart].fromRaw, toRaw: ep(pending.strokeIndex), finished: true })
+            segments.push({ dir: pending.newDir, fromRaw: ep(pending.strokeIndex), toRaw: ep(pF.strokeIndex), finished: true })
+            segStart = pF.strokeIndex
+            segDir = strokes2[segStart].dir
+            features = []; pending = null; pendingFeatures = []
+            j = segStart + 1
+            continue
+          }
+          j++; continue
+        }
+        if (s.dir === segDir) { j++; continue }
+        segment.pushFeature(features, s, segDir)
+        const f1 = segment.findFeatureFractal(features, segDir)
+        if (f1) {
+          const f0 = features[features.length - 3]
+          const gap = f1.low > f0.high || f1.high < f0.low
+          if (!gap) {
+            segments.push({ dir: segDir, fromRaw: strokes2[segStart].fromRaw, toRaw: ep(f1.strokeIndex), finished: true })
+            segStart = f1.strokeIndex
+            segDir = strokes2[segStart].dir
+            features = []
+            j = segStart + 1
+            continue
+          }
+          pending = { strokeIndex: f1.strokeIndex, newDir: strokes2[f1.strokeIndex].dir, replayFrom: j + 1 }
+          pendingFeatures = []
+          j++
+          continue
+        }
+        j++
+      }
+      if (segStart < nn) {
+        segments.push({ dir: segDir, fromRaw: strokes2[segStart].fromRaw, toRaw: strokes2[nn - 1].toRaw, finished: false })
+      }
+      return segments
+    }
+    const ref = refScan(strokes, 0)
+    assert.strictEqual(
+      JSON.stringify(r.segments.map((s) => [s.dir, s.fromRaw, s.toRaw, s.finished])),
+      JSON.stringify(ref.map((s) => [s.dir, s.fromRaw, s.toRaw, s.finished])),
+      'seed ' + seed + ' 否定重放应等价于完整重放'
+    )
+  }
 })
 
 // ---------------------------------------------------------------------------
