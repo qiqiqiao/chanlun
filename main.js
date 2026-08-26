@@ -15,7 +15,8 @@
       stroke: true,
       segment: true,
       segmentCenter: true,
-      strokeCenter: false
+      strokeCenter: false,
+      divergence: true
     },
     indOptions: {
       volume: true,
@@ -48,7 +49,12 @@
     segmentCenter: 'rgba(88, 101, 242, 0.22)',
     segmentCenterBorder: '#5865f2',
     strokeCenter: 'rgba(180, 100, 230, 0.20)',
-    strokeCenterBorder: '#b464e6'
+    strokeCenterBorder: '#b464e6',
+    // 背驰标记：强背驰高亮（顶=红 / 底=绿），弱背驰半透明提示
+    divergenceTopStrong: '#ff2d55',
+    divergenceTopWeak: 'rgba(255, 93, 122, 0.6)',
+    divergenceBottomStrong: '#00e676',
+    divergenceBottomWeak: 'rgba(63, 214, 127, 0.55)'
   }
 
   let chart = null
@@ -261,6 +267,8 @@
       return
     }
     const finished = chanState.segments.filter((s) => s.finished).length
+    const divs = chanState.divergences || []
+    const strongDivs = divs.filter((d) => d.confirmed).length
     el.textContent =
       state.symbol +
       ' · ' + currentExchange().label +
@@ -268,7 +276,8 @@
       ' · 笔 ' + chanState.strokes.length +
       ' · 线段 ' + finished + '+' + (chanState.segments.length - finished) +
       ' · 线段中枢 ' + chanState.segmentCenters.length +
-      ' · 笔中枢 ' + chanState.strokeCenters.length
+      ' · 笔中枢 ' + chanState.strokeCenters.length +
+      ' · 背驰 ' + strongDivs + '/' + divs.length
   }
 
   function drawCenterRect(ctx, x, y, w, h, fill, border) {
@@ -384,6 +393,31 @@
           ctx.lineTo(x + marker, y)
           ctx.closePath()
           ctx.fill()
+        }
+      }
+    }
+
+    // 5. 笔背驰标记（结合大级别线段动量：强背驰高亮 + 圆环，弱背驰半透明文字）
+    if (opts.divergence && chanState.divergences) {
+      ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
+      ctx.textAlign = 'center'
+      ctx.lineWidth = 1
+      for (const d of chanState.divergences) {
+        if (d.rawIndex < from || d.rawIndex > to) continue
+        const strong = d.strength === 'strong'
+        ctx.fillStyle = strong
+          ? (d.kind === 'top' ? COLORS.divergenceTopStrong : COLORS.divergenceBottomStrong)
+          : (d.kind === 'top' ? COLORS.divergenceTopWeak : COLORS.divergenceBottomWeak)
+        const x = X(d.rawIndex)
+        const yPrice = Y(d.value)
+        const label = d.kind === 'top' ? '顶背驰' : '底背驰'
+        const labelY = d.kind === 'top' ? yPrice - 16 : yPrice + 18
+        ctx.fillText(label, x, labelY)
+        if (strong) {
+          ctx.strokeStyle = ctx.fillStyle
+          ctx.beginPath()
+          ctx.arc(x, yPrice, 5, 0, Math.PI * 2)
+          ctx.stroke()
         }
       }
     }
@@ -700,6 +734,7 @@
     $('#tg-segment').addEventListener('change', (e) => toggleChanOption('segment', e.target.checked))
     $('#tg-segcenter').addEventListener('change', (e) => toggleChanOption('segmentCenter', e.target.checked))
     $('#tg-strcenter').addEventListener('change', (e) => toggleChanOption('strokeCenter', e.target.checked))
+    $('#tg-divergence').addEventListener('change', (e) => toggleChanOption('divergence', e.target.checked))
     $('#tg-volume').addEventListener('change', (e) => toggleIndicator('volume', e.target.checked))
     $('#tg-macd').addEventListener('change', (e) => toggleIndicator('macd', e.target.checked))
   }

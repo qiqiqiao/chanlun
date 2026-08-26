@@ -14,13 +14,15 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 │  ├─ stroke.js        笔（可回放状态机 createStrokeMachine）
 │  ├─ segment.js       线段（特征序列法，segmentScan 可恢复扫描）
 │  ├─ center.js        中枢（区间重叠 + 延伸）
+│  ├─ center.js        中枢（区间重叠 + 延伸）
+│  ├─ divergence.js    笔背驰（MACD 动量强度 + 大级别=线段动量确认）
 │  └─ analyzer.js      增量计算（createAnalyzer：update / updateLast）
 ├─ chanlun.js          模块装配层 → window.chanlun / module.exports（API 与旧版单文件一致）
 ├─ data-layer.js       可靠数据层：K线缓存、指数退避重试、WS 自动重连、图表加载器
 ├─ realtime.js         实时行情更新策略（内容签名判末根变化，P0 修复）
 ├─ main.js             图表集成（klinecharts v10 + 交易所适配 + 缠论绘制）
 └─ tests/              零依赖测试（node tests/run.js）
-   ├─ merge / fractal / stroke / segment / center / analyzer .test.js   各层单元 + 增量一致性
+   ├─ merge / fractal / stroke / segment / center / divergence / analyzer .test.js   各层单元 + 增量一致性
    ├─ segment-edge.test.js   线段判定边界（第二种情况/否定/确认/锚点恢复）+ 回归
    ├─ fixtures.js + fixtures.test.js   可复用测试数据 + 锁定结构
    ├─ data-layer.test.js    数据层单元测试（假 fetch/WS/定时器）
@@ -32,7 +34,35 @@ index.html     脚本按依赖顺序加载（无构建步骤）
    └─ browser-smoke.test.js 浏览器装配冒烟（vm 模拟，验证 index.html 脚本路径）
 ```
 
-流水线：`原始K线 → 包含关系合并 → 分型 → 笔 → 线段 → 中枢`
+流水线：`原始K线 → 包含关系合并 → 分型 → 笔 → 线段 → 中枢 → 笔背驰`
+
+## 笔背驰（结合大级别走势动量）
+
+`src/divergence.js`，判据分两层：
+
+1. **局部（笔级别）**：向前找最近一根「可超越」的同向笔（遇到未创新高/新低的
+   同向笔即停止回溯），两笔之间需存在笔中枢（中枢起于两笔之间，或单一延伸
+   大中枢覆盖两笔——盘整背驰）。后笔创出极值但**动量强度**弱于前笔
+   （强度比 < `divergence.minMomentumDrop`）→ 笔背驰。
+2. **大级别（线段级别）确认**：后笔所在线段 vs 其前一条已完结同向线段比较动量：
+   - 大级别动量同步衰减 + 线段方向与笔同向 → **强背驰**（confirmed）；
+   - 大级别动量仍在扩张或无比价 → **弱背驰**（更可能是中枢震荡/回调）。
+
+动量度量 = **单位K线 MACD 柱净面积**：`hist = 2*(DIF-DEA)`（12/26/9），
+区间 Σhist 按移动方向定向后取绝对值再除以窗口K线数——归一化时长使不同长度
+的两笔/两线段可公度，取绝对值兼容 0 轴上下穿越。
+
+事件字段：
+
+```
+{
+  si, kind: 'top'|'bottom', dir, prevSi,   // 背驰笔与被比较笔
+  rawIndex, value, provisional,            // 位置；尾笔未定型标记
+  momentum: { current, previous, ratio },  // 动量强度与比值
+  bigLevel: { segmentSi, aligned, momentumRatio, fading },
+  strength: 'strong'|'weak', confirmed
+}
+```
 
 ## 实时行情更新策略（realtime.js）
 
@@ -53,7 +83,7 @@ barSignature(bar) = timestamp|open|high|low|close|volume|isBarClosed
 ## 运行测试
 
 ```bash
-node tests/run.js            # 全部测试（92 项，不含真实网络）
+node tests/run.js            # 全部测试（108 项，不含真实网络）
 LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js   # 真实 Binance/OKX 链路压测
 node tests/run.js tests/segment-edge.test.js   # 单文件
 ```
@@ -90,6 +120,7 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
   segments,        // 线段（dir/from/to/fromRaw/toRaw/finished）
   strokeCenters,   // 笔中枢（startIndex/endIndex/startRaw/endRaw/zsLow/zsHigh）
   segmentCenters,  // 线段中枢
+  divergences,     // 笔背驰事件（见「笔背驰」一节）
   dataLen
 }
 ```
@@ -101,6 +132,13 @@ chanlun.analyze(bars, {
   biMinGap: 4,                    // 笔内合并K线最小间隔（兼容旧参数）
   fractal: { mode: 'strict' },    // strict | relaxed
   segment: { method: 'feature-sequence' },
-  center: { minElements: 3 }
+  center: { minElements: 3 },
+  divergence: {
+    macdFast: 12,                 // 动量度量 MACD 快线
+    macdSlow: 26,                 // 慢线
+    macdSignal: 9,                // 信号线
+    minMomentumDrop: 0.9,         // 后笔动量 < 前同向笔 × 该值 → 局部背驰
+    requireCenter: true           // 两笔间需存在笔中枢（趋势背驰口径）
+  }
 })
 ```

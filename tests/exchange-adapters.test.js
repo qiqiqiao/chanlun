@@ -17,7 +17,7 @@ const c = require('../chanlun.js')
 const { randomWalk } = require('./helpers')
 const t = (name, fn) => global.__registerTest('exchange: ' + name, fn)
 
-const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'realtime.js', 'main.js']
+const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/divergence.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'realtime.js', 'main.js']
 
 // 在浏览器模拟环境加载真实 main.js（init 延迟，不触碰真实 DOM）
 function loadApp(fetchImpl) {

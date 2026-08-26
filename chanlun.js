@@ -10,6 +10,7 @@
  *   src/stroke.js    笔（可回放状态机）
  *   src/segment.js   线段（特征序列法，可恢复扫描；缺口第二种情况重放修复）
  *   src/center.js    中枢（区间重叠 + 延伸）
+ *   src/divergence.js 笔背驰（MACD 动量 + 大级别线段动量确认）
  *   src/analyzer.js  增量计算（update / updateLast）
  *
  * 浏览器：先按依赖顺序加载 src/*.js（各自注册到 global.Chanlun），
@@ -28,6 +29,7 @@
     const { calcStrokes, createStrokeMachine } = core.stroke
     const { segmentScan, calcSegments, calcSegmentsFull } = core.segment
     const { centerScan, calcCenters } = core.center
+    const { calcDivergences, macdHistogram, rangeMomentum } = core.divergence
     const { createAnalyzer } = core.analyzer
 
     // 全量入口：输出格式与旧版保持一致
@@ -41,6 +43,14 @@
       const segments = calcSegments(strokes, cfg)
       const strokeCenters = calcCenters(strokes, cfg)
       const segmentCenters = calcCenters(segments, cfg)
+      const divergences = calcDivergences(
+        strokes,
+        segments,
+        strokeCenters,
+        merged,
+        klineDataList.map((k) => k.close),
+        cfg
+      )
       return {
         merged,
         // 只保留有效分型（笔的端点），避免密集噪点分型
@@ -49,6 +59,7 @@
         segments,
         strokeCenters,
         segmentCenters,
+        divergences,
         dataLen: klineDataList.length
       }
     }
@@ -69,7 +80,10 @@
       calcSegments,
       calcSegmentsFull,
       centerScan,
-      calcCenters
+      calcCenters,
+      calcDivergences,
+      macdHistogram,
+      rangeMomentum
     }
   }
 
@@ -81,14 +95,15 @@
       fractal: require('./src/fractal.js'),
       stroke: require('./src/stroke.js'),
       segment: require('./src/segment.js'),
-      center: require('./src/center.js')
+      center: require('./src/center.js'),
+      divergence: require('./src/divergence.js')
     }
     core.analyzer = require('./src/analyzer.js')(core)
     module.exports = buildApi(core)
   } else {
     // 浏览器：src/*.js 已按顺序注册到 global.Chanlun
     const core = global.Chanlun || {}
-    const MISSING = ['config', 'merge', 'fractal', 'stroke', 'segment', 'center', 'analyzer'].filter((k) => !core[k])
+    const MISSING = ['config', 'merge', 'fractal', 'stroke', 'segment', 'center', 'divergence', 'analyzer'].filter((k) => !core[k])
     if (MISSING.length) {
       throw new Error('chanlun.js：缺少算法模块 src/' + MISSING.join(', ') + '.js（请按 index.html 的依赖顺序加载）')
     }

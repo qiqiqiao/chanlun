@@ -23,7 +23,7 @@ const realtime = require('../realtime.js')
 const t = (name, fn) => global.__registerTest('live: ' + name, fn)
 
 const ENABLED = process.env.LIVE_NETWORK === '1'
-const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'realtime.js', 'main.js']
+const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/divergence.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'realtime.js', 'main.js']
 
 function loadApp() {
   const sb = { console, __CHANLUN_TEST__: true, fetch, WebSocket, setTimeout, clearTimeout }

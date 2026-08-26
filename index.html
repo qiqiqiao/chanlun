@@ -11,7 +11,7 @@
   <header class="topbar">
     <div class="brand">
       <h1>缠论<span>图表</span></h1>
-      <span class="subtitle">分型 · 笔 · 线段 · 中枢</span>
+      <span class="subtitle">分型 · 笔 · 线段 · 中枢 · 背驰</span>
     </div>
     <div class="controls">
       <div class="row">
@@ -46,6 +46,7 @@
           <label><input type="checkbox" id="tg-segment" checked> 线段</label>
           <label><input type="checkbox" id="tg-segcenter" checked> 线段中枢</label>
           <label><input type="checkbox" id="tg-strcenter"> 笔中枢</label>
+          <label><input type="checkbox" id="tg-divergence" checked> 笔背驰</label>
           <label><input type="checkbox" id="tg-volume" checked> 交易量</label>
           <label><input type="checkbox" id="tg-macd" checked> MACD</label>
         </div>
@@ -61,13 +62,14 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/klinecharts@10.0.2/dist/umd/klinecharts.min.js"></script>
-  <!-- 缠论算法模块（依赖顺序：config → merge → fractal → stroke → segment → center → analyzer → 装配） -->
+  <!-- 缠论算法模块（依赖顺序：config → merge → fractal → stroke → segment → center → divergence → analyzer → 装配） -->
   <script src="src/config.js"></script>
   <script src="src/merge.js"></script>
   <script src="src/fractal.js"></script>
   <script src="src/stroke.js"></script>
   <script src="src/segment.js"></script>
   <script src="src/center.js"></script>
+  <script src="src/divergence.js"></script>
   <script src="src/analyzer.js"></script>
   <script src="chanlun.js"></script>
   <!-- 可靠数据层（缓存/重试/重连/加载器） -->

@@ -62,7 +62,7 @@ t('reset 后可重新初始化', () => {
   a.update(bars.slice(0, 60))
   a.reset()
   assert.deepStrictEqual(a.state, {
-    merged: [], fractals: [], strokes: [], segments: [], strokeCenters: [], segmentCenters: [], dataLen: 0
+    merged: [], fractals: [], strokes: [], segments: [], strokeCenters: [], segmentCenters: [], divergences: [], dataLen: 0
   })
   a.update(bars)
   assert.deepStrictEqual(a.state, c.analyze(bars, { biMinGap: 4 }))

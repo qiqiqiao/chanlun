@@ -22,6 +22,7 @@ const CORE_FILES = [
   'src/stroke.js',
   'src/segment.js',
   'src/center.js',
+  'src/divergence.js',
   'src/analyzer.js',
   'chanlun.js',
   'data-layer.js',

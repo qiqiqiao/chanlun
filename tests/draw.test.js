@@ -17,7 +17,7 @@ const assert = require('assert')
 const { randomWalk } = require('./helpers')
 const t = (name, fn) => global.__registerTest('draw: ' + name, fn)
 
-const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'realtime.js', 'main.js']
+const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/divergence.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'realtime.js', 'main.js']
 
 function loadApp() {
   const sb = { console, __CHANLUN_TEST__: true, fetch: async () => ({ ok: false, status: 500, text: async () => '' }) }
@@ -109,7 +109,7 @@ t('drawChan：横跨左边界的线段中枢被绘制（端到端回归）', () 
     fillStyle: '', strokeStyle: '', lineWidth: 0,
     fillRect(x, y, w, h) { rects.push({ kind: 'fill', x, y, w, h }) },
     strokeRect(x, y, w, h) { rects.push({ kind: 'stroke', x, y, w, h }) },
-    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, closePath() {}, fill() {}
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, closePath() {}, fill() {}, arc() {}, fillText() {}
   }
   const chart = {
     getVisibleRange: () => ({ realFrom: 2500, realTo: 3000 }),
@@ -147,7 +147,7 @@ t('drawChan：窗口包含中枢主体时正常绘制（不回归）', () => {
     fillStyle: '', strokeStyle: '', lineWidth: 0,
     fillRect(x, y, w, h) { rects.push({ kind: 'fill', x, y, w, h }) },
     strokeRect(x, y, w, h) { rects.push({ kind: 'stroke', x, y, w, h }) },
-    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, closePath() {}, fill() {}
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, closePath() {}, fill() {}, arc() {}, fillText() {}
   }
   const chart = {
     getVisibleRange: () => ({ realFrom: 0, realTo: 3000 }),

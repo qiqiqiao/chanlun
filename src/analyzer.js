@@ -7,6 +7,7 @@
  *     - segments 全量重扫（锚点重扫无法覆盖“新K线推翻旧 pending/待确认段”的
  *       连锁聚合，而线段/中枢数量少，全量重扫开销可接受，且彻底避免锚漂移）
  *     - centers 全量重扫
+ *     - divergences 依赖笔+线段+笔中枢，随之上游重算后全量重算（O(n) 纯函数）
  *   一致性：增量结果与 analyze(全部数据) 逐字段一致（tests 覆盖）
  *
  * 依赖注入：本模块以 core（Chanlun 命名空间）为工厂参数，
@@ -23,6 +24,7 @@
     const { createStrokeMachine } = core.stroke
     const { calcSegmentsFull } = core.segment
     const { calcCenters } = core.center
+    const { calcDivergences } = core.divergence
 
     function createAnalyzer(config) {
       const cfg = normalizeConfig(config)
@@ -35,6 +37,7 @@
       let segments = []
       let strokeCenters = []
       let segmentCenters = []
+      let divergences = []
       let dataLen = 0
       let centerStrokeLastStart = -1 // 最后一个笔中枢的 startIndex（-1 = 无）
       let centerSegmentLastStart = -1
@@ -51,6 +54,7 @@
           segments,
           strokeCenters,
           segmentCenters,
+          divergences,
           dataLen
         }
       }
@@ -65,6 +69,7 @@
         segments = []
         strokeCenters = []
         segmentCenters = []
+        divergences = []
         dataLen = 0
         centerStrokeLastStart = -1
         centerSegmentLastStart = -1
@@ -89,6 +94,7 @@
         segmentCenters = calcCenters(segments, cfg)
         centerStrokeLastStart = strokeCenters.length ? strokeCenters[strokeCenters.length - 1].startIndex : -1
         centerSegmentLastStart = segmentCenters.length ? segmentCenters[segmentCenters.length - 1].startIndex : -1
+        recalcDivergences()
         dataLen = bars.length
       }
 
@@ -103,6 +109,18 @@
 
       const segEq = (a, b) =>
         a.dir === b.dir && a.fromRaw === b.fromRaw && a.toRaw === b.toRaw && a.finished === b.finished
+
+      // 笔背驰依赖笔+线段+笔中枢+原始收盘价，随上游全量重算（纯函数 O(n)）
+      function recalcDivergences() {
+        divergences = calcDivergences(
+          strokes(),
+          segments,
+          strokeCenters,
+          merged,
+          raw.map((b) => b.close),
+          cfg
+        )
+      }
 
       // 分型重判 → 交替过滤重建 → 笔重放 → 线段/中枢重扫（增量核心）
       // merge/fractal/stroke 三层精确增量；线段与两种中枢基于已增量更新的 strokes
@@ -126,6 +144,7 @@
         segmentCenters = calcCenters(segments, cfg)
         centerStrokeLastStart = strokeCenters.length ? strokeCenters[strokeCenters.length - 1].startIndex : -1
         centerSegmentLastStart = segmentCenters.length ? segmentCenters[segmentCenters.length - 1].startIndex : -1
+        recalcDivergences()
       }
 
       // 追加新K线（实时行情增量主路径）

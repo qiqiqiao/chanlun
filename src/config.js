@@ -7,6 +7,7 @@
  *                      'relaxed' 只比较对应端
  *   segment.method   ：特征序列法（当前仅此一种口径）
  *   center.minElements：中枢最少元素数（笔/线段）
+ *   divergence.*     ：笔背驰（MACD 柱面积动量 + 大级别=线段动量确认）
  *
  * 兼容旧参数 biMinGap（顶层数字键）→ 归一为 bi.minGap。
  */
@@ -25,6 +26,13 @@
     },
     center: {
       minElements: 3 // 中枢最少元素数（笔/线段）
+    },
+    divergence: {
+      macdFast: 12, // 动量度量 MACD 快线
+      macdSlow: 26, // 慢线
+      macdSignal: 9, // 信号线
+      minMomentumDrop: 0.9, // 后笔动量 < 前同向笔动量 × 该值 → 局部背驰
+      requireCenter: true // 两笔间需存在笔中枢（趋势背驰口径）
     }
   }
 
@@ -34,7 +42,8 @@
       bi: Object.assign({}, DEFAULT_CONFIG.bi, config.bi || {}),
       fractal: Object.assign({}, DEFAULT_CONFIG.fractal, config.fractal || {}),
       segment: Object.assign({}, DEFAULT_CONFIG.segment, config.segment || {}),
-      center: Object.assign({}, DEFAULT_CONFIG.center, config.center || {})
+      center: Object.assign({}, DEFAULT_CONFIG.center, config.center || {}),
+      divergence: Object.assign({}, DEFAULT_CONFIG.divergence, config.divergence || {})
     }
     // 兼容旧参数 biMinGap
     if (typeof config.biMinGap === 'number') cfg.bi.minGap = config.biMinGap
