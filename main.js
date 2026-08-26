@@ -59,6 +59,7 @@
 
   let chart = null
   let chanState = null
+  let faviconSymbol = null
 
   // ---------------------------------------------------------------------------
   // 交易所数据层（可靠性机制在 data-layer.js：缓存/重试/重连/加载器）
@@ -324,7 +325,7 @@
     const range = chart.getVisibleRange()
     const { gapBar, halfGapBar } = chart.getBarSpace()
     const from = Math.max(0, Math.floor(range.realFrom))
-    const to = Math.min(chanState.dataLen, Math.ceil(range.realTo))
+    const to = Math.min(chanState.dataLen - 1, Math.ceil(range.realTo))
     const X = (rawIndex) => xAxis.convertToPixel(rawIndex)
     const Y = (value) => yAxis.convertToPixel(value)
 
@@ -372,8 +373,7 @@
     if (opts.fractal) {
       const marker = Math.max(3.5, Math.min(7, gapBar * 0.3))
       ctx.lineWidth = 1
-      for (const f of chanState.fractals) {
-        if (f.rawMiddle < from || f.rawMiddle > to) continue
+      for (const f of visibleInRange(chanState.fractals, (f) => f.rawMiddle, (f) => f.rawMiddle, from, to)) {
         const x = X(f.rawMiddle)
         if (f.type === 'top') {
           const y = Y(f.high) + 3
@@ -402,8 +402,7 @@
       ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
       ctx.textAlign = 'center'
       ctx.lineWidth = 1
-      for (const d of chanState.divergences) {
-        if (d.rawIndex < from || d.rawIndex > to) continue
+      for (const d of visibleInRange(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to)) {
         const strong = d.strength === 'strong'
         ctx.fillStyle = strong
           ? (d.kind === 'top' ? COLORS.divergenceTopStrong : COLORS.divergenceBottomStrong)
@@ -526,6 +525,10 @@
   }
 
   function setFavicon(symbol) {
+    // 实时行情每次回调都会刷新标题；币种不变时 favicon 也不变，避免重复创建
+    // canvas、编码 data URL 并触发浏览器图标更新。
+    if (faviconSymbol === symbol) return
+    faviconSymbol = symbol
     const coin = coinOf(symbol)
     const color = COIN_STYLES[coin] || '#5865f2'
     const canvas = document.createElement('canvas')
@@ -593,6 +596,14 @@
   // “笔→线段→中枢”这条从起点连成串的链条整体重算，导致切回原周期后中枢位置漂移。
   const klineCache = window.dataLayer.createKlineCache({ maxPerKey: 5000, maxKeys: 12 })
 
+  // 图表切换后，旧序列的首根时间戳和 OHLC 在极少数情况下可能与新序列碰巧相同。
+  // 显式重置可避免实时更新器复用上一标的/周期的分析状态，也避免新数据到达前绘制旧结构。
+  function resetChanCalc() {
+    chanUpdater.reset()
+    chanState = null
+    updateStatus()
+  }
+
   // klinecharts v10 数据加载器（data-layer.js 实现：init/forward/backward 分页 + 实时订阅）
   function buildDataLoader() {
     return window.dataLayer.createKlineLoader({
@@ -608,6 +619,7 @@
   }
 
   function initChart() {
+    resetChanCalc()
     if (chart) {
       klinecharts.dispose('chart')
     }
@@ -650,6 +662,7 @@
 
   function refreshChart() {
     if (!chart) return
+    resetChanCalc()
     chart.setSymbol({ ticker: state.symbol })
     chart.setPeriod(state.period)
     refreshTabInfo()

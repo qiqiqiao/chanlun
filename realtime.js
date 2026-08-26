@@ -129,6 +129,7 @@
       analyzer = null
       chanState = null
       lastFirstTs = null
+      lastFirstSignature = null
       lastDataLen = 0
       lastLastTs = null
       lastLastSignature = null

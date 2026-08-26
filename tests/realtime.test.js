@@ -143,5 +143,6 @@ t('reset 后从零开始', () => {
   updater.update(bars)
   updater.reset()
   assert.strictEqual(updater.state, null)
+  assert.strictEqual(updater.debug.lastFirstSignature, null)
   assert.strictEqual(updater.update(bars).action, 'init')
 })
