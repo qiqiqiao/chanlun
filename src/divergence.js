@@ -85,12 +85,14 @@
 
   // 笔动量强度：笔端点分型的 mi 窗口映射到原始下标
   function strokeMomentum(hists, merged, s) {
+    if (!s.from || !s.to) return 0
     const w = rawWindow(merged, s.from.mi, s.to.mi)
     return w ? windowIntensity(hists, w.from, w.to, s.dir) : 0
   }
 
   // 线段动量强度（大级别走势动量）：同上线段端点 mi 窗口
   function segmentMomentum(hists, merged, seg) {
+    if (!seg.from || !seg.to) return 0
     const w = rawWindow(merged, seg.from.mi, seg.to.mi)
     return w ? windowIntensity(hists, w.from, w.to, seg.dir) : 0
   }
@@ -106,19 +108,19 @@
     return hit
   }
 
-  // 大级别动量对比：所在线段 vs 其前一条已完结的同向线段
+  // 大级别动量对比：所在线段 vs 其前一条已完结的同向线段（segMom 为预计算动量）
   // 返回 { segmentSi, aligned, momentumRatio, fading }；无比价时 momentumRatio/fading 为 null
-  function bigLevelContext(hists, merged, segments, segSi, strokeDir) {
+  function bigLevelContext(segments, segMom, segSi, strokeDir) {
     if (segSi < 0 || segSi >= segments.length) {
       return { segmentSi: -1, aligned: false, momentumRatio: null, fading: null }
     }
     const cur = segments[segSi]
-    const curMom = segmentMomentum(hists, merged, cur)
+    const curMom = segMom[segSi]
     let prevMom = null
     for (let k = segSi - 1; k >= 0; k--) {
       const p = segments[k]
       if (p.dir === cur.dir && p.finished) {
-        prevMom = segmentMomentum(hists, merged, p)
+        prevMom = segMom[k]
         break
       }
     }
@@ -129,6 +131,60 @@
       momentumRatio: ratio,
       fading: ratio !== null ? ratio < 1 : null
     }
+  }
+
+  // 预计算每个笔的动量强度（原始K线窗口扫描总共 O(n)，避免逐笔重复扫描）
+  function precomputeStrokeMoms(hists, merged, strokes) {
+    const n = strokes.length
+    const out = new Array(n)
+    for (let i = 0; i < n; i++) out[i] = strokeMomentum(hists, merged, strokes[i])
+    return out
+  }
+
+  // 预计算每个线段的动量强度（总 O(n)，避免大级别对比时重复扫描）
+  function precomputeSegmentMoms(hists, merged, segments) {
+    const n = segments.length
+    const out = new Array(n)
+    for (let k = 0; k < n; k++) out[k] = segmentMomentum(hists, merged, segments[k])
+    return out
+  }
+
+  // 中枢区间查询辅助：
+  //   cover[i] = 覆盖笔下标 i 的中枢下标（-1 = 无；中枢互不重叠，至多一个）
+  //   centerStart 升序、centerEnd 对齐 → “起点位于 (i, j)” 用二分 O(log m)，
+  //   “单一中枢覆盖 [i, j]” 用 cover O(1)。
+  // 与旧实现 strokeCenters.some(...) 逐字段等价（tests/verify 已交叉验证）。
+  function buildCenterIndex(strokeCenters, strokeCount) {
+    const n = strokeCenters.length
+    const centerStart = new Array(n)
+    const centerEnd = new Array(n)
+    for (let k = 0; k < n; k++) {
+      centerStart[k] = strokeCenters[k].startIndex
+      centerEnd[k] = strokeCenters[k].endIndex
+    }
+    const cover = new Array(strokeCount).fill(-1)
+    for (let k = 0; k < n; k++) {
+      const s = strokeCenters[k].startIndex
+      const e = Math.min(strokeCenters[k].endIndex, strokeCount - 1)
+      for (let i = s; i <= e; i++) cover[i] = k
+    }
+    return { centerStart, centerEnd, cover }
+  }
+
+  // 两笔 [i, j] 之间是否存在笔中枢（与旧 .some 语义一致）
+  function hasCenterBetween(idx, i, j) {
+    // A：中枢起点位于 (i, j)
+    let lo = 0
+    let hi = idx.centerStart.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (idx.centerStart[mid] <= i) lo = mid + 1
+      else hi = mid
+    }
+    if (lo < idx.centerStart.length && idx.centerStart[lo] < j) return true
+    // B：单一延伸中枢覆盖 [i, j]
+    const ci = idx.cover[i]
+    return ci !== -1 && idx.centerEnd[ci] >= j
   }
 
   /*
@@ -146,6 +202,11 @@
   function calcDivergences(strokes, segments, strokeCenters, merged, closes, cfg) {
     const dcfg = cfg.divergence
     const hists = macdHistogram(closes, dcfg.macdFast, dcfg.macdSlow, dcfg.macdSignal)
+    const strokeMom = precomputeStrokeMoms(hists, merged, strokes)
+    const segMom = precomputeSegmentMoms(hists, merged, segments)
+    const centerIdx = dcfg.requireCenter
+      ? buildCenterIndex(strokeCenters, strokes.length)
+      : null
     const out = []
     for (let j = 2; j < strokes.length; j++) {
       const s = strokes[j]
@@ -155,28 +216,20 @@
         const p = strokes[i]
         const beyond = up ? s.toValue > p.toValue : s.toValue < p.toValue
         if (!beyond) break
-        if (dcfg.requireCenter) {
-          const hasCenter = strokeCenters.some(
-            (c) =>
-              (c.startIndex > i && c.startIndex < j) ||
-              (c.startIndex <= i && c.endIndex >= j)
-          )
-          if (!hasCenter) continue
-        }
+        if (dcfg.requireCenter && !hasCenterBetween(centerIdx, i, j)) continue
         prev = i
         break
       }
       if (prev < 0) continue
       const p = strokes[prev]
-      const momCur = strokeMomentum(hists, merged, s)
-      const momPrev = strokeMomentum(hists, merged, p)
+      const momCur = strokeMom[j]
+      const momPrev = strokeMom[prev]
       if (momPrev <= 0) continue
       const ratio = momCur / momPrev
       if (ratio >= dcfg.minMomentumDrop) continue
       const bigLevel = bigLevelContext(
-        hists,
-        merged,
         segments,
+        segMom,
         enclosingSegment(segments, s),
         s.dir
       )

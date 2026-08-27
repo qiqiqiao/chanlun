@@ -4,6 +4,8 @@
  * 首次全量，之后 update() 精确增量 / updateLast() 回退重放。
  *   分层锚点：
  *     - merge/fractals/strokes 精确增量（O(新K线数)）
+ *     - updateLast：unmerge 回退末根对 merged 的贡献后续接新值（merge 层
+ *       增量），分型窗口重判、笔公共前缀重放
  *     - segments 全量重扫（锚点重扫无法覆盖“新K线推翻旧 pending/待确认段”的
  *       连锁聚合，而线段/中枢数量少，全量重扫开销可接受，且彻底避免锚漂移）
  *     - centers 全量重扫
@@ -29,6 +31,7 @@
     function createAnalyzer(config) {
       const cfg = normalizeConfig(config)
       let raw = [] // 完整原始K线（updateLast 回退重放需要）
+      let closes = [] // 与 raw 对齐的收盘价缓存（背驰 MACD 用，避免每次重算时 map 分配）
       let merged = []
       let dirs = []
       let fxAll = [] // 过滤后的分型流（喂给笔状态机）
@@ -61,6 +64,7 @@
 
       function reset() {
         raw = []
+        closes = []
         merged = []
         dirs = []
         fxAll = []
@@ -77,7 +81,16 @@
       }
 
       function fullInit(bars) {
-        raw = bars.slice()
+        const n = bars.length
+        // 一趟拷贝同时构建 raw 与 closes（旧实现 slice + map 两趟两次分配）
+        const newRaw = new Array(n)
+        const newCloses = new Array(n)
+        for (let i = 0; i < n; i++) {
+          newRaw[i] = bars[i]
+          newCloses[i] = bars[i].close
+        }
+        raw = newRaw
+        closes = newCloses
         const m = mergeBars(raw)
         merged = m.merged
         dirs = m.dirs
@@ -117,7 +130,7 @@
           segments,
           strokeCenters,
           merged,
-          raw.map((b) => b.close),
+          closes,
           cfg
         )
       }
@@ -156,7 +169,11 @@
         }
         const r = resumeMerge(merged, dirs, newBars, dataLen)
         dataLen += newBars.length
-        raw.push(...newBars)
+        // 逐根追加（spread push 在大批量追加时可能触发参数上限）
+        for (let i = 0; i < newBars.length; i++) {
+          raw.push(newBars[i])
+          closes.push(newBars[i].close)
+        }
         let fromMi
         if (r.pushedCount > 0) {
           fromMi = r.lastUpdated ? r.baseLen - 2 : r.baseLen - 1
@@ -169,21 +186,81 @@
         return computeResult()
       }
 
-      // 替换最后一根K线（收盘定型）：整链重建
-      // 增量的 merged 截断回放无法在窗口内覆盖“被截断重建元素的分型残留”，
-      // 且线段/中枢本就全量重扫；定型的发生频率很低（每根 K 线一次），
-      // 直接用全量重建最稳妥、绝不错位。
+      // 回退末根原始K线对 merged 的贡献（updateLast 增量用）：
+      //   - 末根独占末元素 → 弹出该元素（dirs 同步弹出）；
+      //   - 末根并入末元素 → 用其余 rawIndices 以当时的合并方向 dirs[末元素]
+      //     重放包含合并，得到“末根出现之前”的末元素状态。
+      // 之后由调用方 resumeMerge 续接新末根，结果与“末根从未取过旧值”的
+      // 全量流式合并逐字段一致。
+      // 返回 false 表示内部状态与预期不符（防御），调用方应整体重建。
+      function unmergeLastRaw() {
+        const n = raw.length
+        if (!n || !merged.length) return false
+        const lastIdx = merged.length - 1
+        const el = merged[lastIdx]
+        const ris = el.rawIndices
+        if (ris[ris.length - 1] !== n - 1) return false
+        if (ris.length === 1) {
+          merged.pop()
+          dirs.pop()
+          return true
+        }
+        const d = dirs[lastIdx]
+        const keep = ris.length - 1
+        let high = raw[ris[0]].high
+        let low = raw[ris[0]].low
+        for (let t = 1; t < keep; t++) {
+          const k = raw[ris[t]]
+          if (d === 1) {
+            // 向上：高高
+            high = Math.max(high, k.high)
+            low = Math.max(low, k.low)
+          } else if (d === -1) {
+            // 向下：低低
+            high = Math.min(high, k.high)
+            low = Math.min(low, k.low)
+          } else {
+            // 方向未知：更大区间
+            high = Math.max(high, k.high)
+            low = Math.min(low, k.low)
+          }
+        }
+        el.high = high
+        el.low = low
+        ris.length = keep
+        return true
+      }
+
+      // 替换最后一根K线（实时行情末根跳动 / 收盘定型）。
+      // 实时链路下末根每个 tick 都可能原地变化（不只收盘一次），因此这里是
+      // 热路径：先 unmergeLastRaw 回退末根贡献，再 resumeMerge 续接新值
+      // （merge 层增量），随后只重算尾部（分型窗口重判 → 笔重放 →
+      // 线段/中枢/背驰重扫）。回退的前提是 resumeFractals 能清除 merged
+      // 收缩产生的过期分型（mi > merged.length-2 随窗口截断删除），
+      // 否则必须整体重建——异常时回退 fullInit 保证绝不错位。
       function updateLast(newLastBar) {
         if (!machine) {
           update([newLastBar])
           return computeResult()
         }
-        if (raw.length) raw[raw.length - 1] = newLastBar
-        fullInit(raw.slice())
+        const n = raw.length
+        if (!n) {
+          fullInit([newLastBar])
+          return computeResult()
+        }
+        raw[n - 1] = newLastBar
+        if (closes.length === n) closes[n - 1] = newLastBar.close
+        if (unmergeLastRaw()) {
+          resumeMerge(merged, dirs, [newLastBar], n - 1)
+          recomputeTail(merged.length - 2)
+        } else {
+          fullInit(raw)
+        }
         return computeResult()
       }
 
       return {
+        __probe: () => ({ fxAll: fxAll.slice(), filtered: prevFilteredFxs.slice() }),
         update,
         updateLast,
         reset,
