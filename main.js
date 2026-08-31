@@ -15,6 +15,7 @@
       stroke: true,
       segment: true,
       featureSeq: true,
+      mergedFeatureSeq: true,
       segmentCenter: true,
       strokeCenter: false,
       divergence: true
@@ -390,7 +391,33 @@
       }
     }
 
-    // 4. 笔
+    // 4. 特征序列·合并（包含合并后的标准特征K线：实体 + 影线）
+    if (opts.mergedFeatureSeq) {
+      const bodyW = Math.max(3, gapBar * 0.5)
+      for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
+        const feats = seg.mergedFeatures
+        if (!feats || !feats.length) continue
+        for (let i = 0; i < feats.length; i++) {
+          const f = feats[i]
+          if (f.toRaw < from || f.fromRaw > to) continue
+          const x = X((f.fromRaw + f.toRaw) / 2)
+          const color = f.dir === 'up' ? COLORS.featureUp : COLORS.featureDown
+          ctx.strokeStyle = color
+          ctx.fillStyle = color
+          // 影线（合并后的高/低）
+          ctx.beginPath()
+          ctx.moveTo(x, Y(f.high))
+          ctx.lineTo(x, Y(f.low))
+          ctx.stroke()
+          // 实体（合并组最左开盘 → 最右收盘）
+          const top = Math.max(f.fromValue, f.toValue)
+          const bot = Math.min(f.fromValue, f.toValue)
+          ctx.fillRect(x - bodyW / 2, Y(top), bodyW, Math.max(1, Y(bot) - Y(top)))
+        }
+      }
+    }
+
+    // 5. 笔
     if (opts.stroke) {
       ctx.lineWidth = 1.4
       for (const s of visibleInRange(chanState.strokes, (st) => st.fromRaw, (st) => st.toRaw, from, to)) {
@@ -402,7 +429,7 @@
       }
     }
 
-    // 5. 分型
+    // 6. 分型
     if (opts.fractal) {
       const marker = Math.max(3.5, Math.min(7, gapBar * 0.3))
       ctx.lineWidth = 1
@@ -430,7 +457,7 @@
       }
     }
 
-    // 6. 笔背驰标记（结合大级别线段动量：强背驰高亮 + 圆环，弱背驰半透明文字）
+    // 7. 笔背驰标记（结合大级别线段动量：强背驰高亮 + 圆环，弱背驰半透明文字）
     if (opts.divergence && chanState.divergences) {
       ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
       ctx.textAlign = 'center'
@@ -779,6 +806,7 @@
     $('#tg-stroke').addEventListener('change', (e) => toggleChanOption('stroke', e.target.checked))
     $('#tg-segment').addEventListener('change', (e) => toggleChanOption('segment', e.target.checked))
     $('#tg-featureseq').addEventListener('change', (e) => toggleChanOption('featureSeq', e.target.checked))
+    $('#tg-mgfeatureseq').addEventListener('change', (e) => toggleChanOption('mergedFeatureSeq', e.target.checked))
     $('#tg-segcenter').addEventListener('change', (e) => toggleChanOption('segmentCenter', e.target.checked))
     $('#tg-strcenter').addEventListener('change', (e) => toggleChanOption('strokeCenter', e.target.checked))
     $('#tg-divergence').addEventListener('change', (e) => toggleChanOption('divergence', e.target.checked))

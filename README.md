@@ -135,6 +135,11 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
 `{ si, dir, high, low, fromRaw, toRaw, fromValue, toValue }`。图表「特征序列」
 开关默认开启，绘制为特征方向的虚拟K线（影线 + 开盘/收盘小横线）。
 
+`segments[].mergedFeatures` 是**包含合并后的标准特征K线**（判定即基于它）：把包含
+关系的特征元素就地合并（向上取高、向下取低，方向看前两个元素），每根合并K线的
+`fromRaw/toRaw` 覆盖参与合并的全部原始笔、`fromValue/toValue` 为最左开盘到最右收盘。
+图表「特征序列·合并」开关默认开启，以实体K线（实体+影线，沿用青/粉）叠加绘制。
+
 ## 参数化
 
 ```js

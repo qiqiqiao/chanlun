@@ -123,6 +123,8 @@ t('drawChan：横跨左边界的线段中枢被绘制（端到端回归）', () 
   app.__chanlunChart.state.chanOptions.fractal = false
   app.__chanlunChart.state.chanOptions.stroke = false
   app.__chanlunChart.state.chanOptions.segment = false
+  app.__chanlunChart.state.chanOptions.featureSeq = false
+  app.__chanlunChart.state.chanOptions.mergedFeatureSeq = false
   app.__chanlunChart.state.chanOptions.segmentCenter = true
   app.__chanlunChart.state.chanOptions.strokeCenter = false
 
@@ -156,7 +158,8 @@ t('drawChan：窗口包含中枢主体时正常绘制（不回归）', () => {
   const xAxis = { convertToPixel: (v) => v }
   const yAxis = { convertToPixel: (v) => 1000 - v }
   const o = app.__chanlunChart.state.chanOptions
-  o.fractal = false; o.stroke = false; o.segment = false; o.segmentCenter = true; o.strokeCenter = false
+  o.fractal = false; o.stroke = false; o.segment = false; o.featureSeq = false; o.mergedFeatureSeq = false
+  o.segmentCenter = true; o.strokeCenter = false
 
   app.__chanlunChart.drawChan({ ctx, chart, indicator: {}, bounding: {}, xAxis, yAxis })
   const fills = rects.filter((r) => r.kind === 'fill')

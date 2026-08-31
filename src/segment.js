@@ -42,9 +42,17 @@
     return maxLow < minHigh
   }
 
-  // 特征序列元素：仅保留 strokeIndex 与该元素的高/低（一笔看成一根虚拟K线）
+  // 特征序列元素：仅保留 strokeIndex 与该元素的高/低（一笔看成一根虚拟K线）。
+  // 元素同时携带视觉范围（fromRaw/toRaw/fromValue/toValue），供「合并后的特征
+  // K线」可视化：合并时范围扩张为覆盖所有参与合并的原始笔（起点保持最左、
+  // 终点取最新一笔）。判定只读 high/low/strokeIndex，可视化字段向后兼容。
   function pushFeature(features, s, segDir) {
-    let feature = { strokeIndex: s.si, high: s.high, low: s.low }
+    let feature = {
+      strokeIndex: s.si, dir: s.dir,
+      high: s.high, low: s.low,
+      fromRaw: s.fromRaw, toRaw: s.toRaw,
+      fromValue: s.fromValue, toValue: s.toValue
+    }
     if (features.length === 0) {
       features.push(feature)
       return features
@@ -66,9 +74,19 @@
     }
     if (up === null) up = segDir === 'up'
     if (up) {
-      feature = { strokeIndex: s.si, high: Math.max(lastF.high, feature.high), low: Math.max(lastF.low, feature.low) }
+      feature = {
+        strokeIndex: s.si, dir: s.dir,
+        high: Math.max(lastF.high, feature.high), low: Math.max(lastF.low, feature.low),
+        fromRaw: lastF.fromRaw, toRaw: s.toRaw,
+        fromValue: lastF.fromValue, toValue: s.toValue
+      }
     } else {
-      feature = { strokeIndex: s.si, high: Math.min(lastF.high, feature.high), low: Math.min(lastF.low, feature.low) }
+      feature = {
+        strokeIndex: s.si, dir: s.dir,
+        high: Math.min(lastF.high, feature.high), low: Math.min(lastF.low, feature.low),
+        fromRaw: lastF.fromRaw, toRaw: s.toRaw,
+        fromValue: lastF.fromValue, toValue: s.toValue
+      }
     }
     features[features.length - 1] = feature
     return features
@@ -100,11 +118,14 @@
     let pendingFeatures = [] // 新线段的特征序列
     let j = segStart + 1
 
-    // 特征序列的可视化数据（原始笔，不做包含合并）：
-    //   curFeatures  = 当前线段的特征元素（特征方向的笔，按扫描顺序原样记录）
-    //   pendingRaw   = 第二种情况待确认期间收集的「新线段特征方向」笔（确认后成为新线段特征）
-    // 否定重放时 pendingRaw 清空、curFeatures 不受污染（重放会重新把笔加入 curFeatures），
-    // 因此最终每个线段的 features 恰好是扫描过程中用到的原始特征元素序列。
+    // 特征序列的可视化数据（两类，互补输出）：
+    //   1) features（原始笔，不做包含合并）：见 curFeatures / pendingRaw——
+    //      curFeatures = 当前线段的特征元素（特征方向的笔，按扫描顺序原样记录）；
+    //      pendingRaw  = 第二种情况待确认期间收集的「新线段特征方向」笔（确认后成为新线段特征）。
+    //      否定重放时 pendingRaw 清空、curFeatures 不受污染（重放会重新把笔加入 curFeatures）。
+    //   2) mergedFeatures（包含合并后的标准特征K线）：即 features/pendingFeatures 两个
+    //      合并序列在段终止时的形态（pushFeature 就地合并，元素含 fromRaw/toRaw 视觉范围），
+    //      线段结束时整体挂载。
     let curFeatures = []
     let pendingRaw = []
     const featureOf = (s) => ({
@@ -166,7 +187,8 @@
             high: Math.max(ss.from.high, pp.high),
             low: Math.min(ss.from.low, pp.low),
             finished: true,
-            features: curFeatures
+            features: curFeatures,
+            mergedFeatures: features
           })
           confirmedSis.push(pending.strokeIndex)
           const cp = endPointOf(pF.strokeIndex)
@@ -179,7 +201,8 @@
             high: Math.max(pp.high, cp.high),
             low: Math.min(pp.low, cp.low),
             finished: true,
-            features: pendingRaw
+            features: pendingRaw,
+            mergedFeatures: pendingFeatures
           })
           confirmedSis.push(pF.strokeIndex)
           // 从确认分型笔开始新的线段。pendingRaw 已作为 seg1 的特征序列（含确认
@@ -224,7 +247,8 @@
             high: Math.max(ss.from.high, pp.high),
             low: Math.min(ss.from.low, pp.low),
             finished: true,
-            features: curFeatures
+            features: curFeatures,
+            mergedFeatures: features
           })
           confirmedSis.push(f1.strokeIndex)
           segStart = f1.strokeIndex
@@ -258,7 +282,8 @@
         high: Math.max(ss.from.high, es.to.high),
         low: Math.min(ss.from.low, es.to.low),
         finished: false,
-        features: curFeatures
+        features: curFeatures,
+        mergedFeatures: features
       })
     }
     return { segments, confirmedSis }

@@ -149,6 +149,61 @@ t('特征序列：第一种情况（无缺口）各段 features 为特征方向�
   assert.strictEqual(tail.features[0].dir, 'up', 'tail 特征方向')
 })
 
+t('特征序列·合并：包含元素合并成一根K线，范围覆盖全部参与笔', () => {
+  // 向上线段，特征 = 向下笔。s3 被 s1 完全包含 → 合并为一根（范围 s1..s3）。
+  const strokes = [
+    mkStroke(0, 'up', 100, 110),
+    mkStroke(1, 'down', 110, 100), // 特征 e0：high110 low100（fromRaw5 toRaw10）
+    mkStroke(2, 'up', 100, 105),
+    mkStroke(3, 'down', 105, 101), // 与 e0 包含 → 并入 e0：high110 low101（fromRaw5 toRaw15）
+    mkStroke(4, 'up', 101, 112),
+    mkStroke(5, 'down', 112, 105), // 特征 e1：high112 low105（fromRaw20 toRaw25，顶分型中间）
+    mkStroke(6, 'up', 105, 107),
+    mkStroke(7, 'down', 107, 98) // 特征 e2：high107 low98（fromRaw30 toRaw35，确认元素）
+  ]
+  const r = c.segmentScan(strokes, 0)
+  const seg0 = r.segments[0]
+  assert.strictEqual(seg0.dir, 'up')
+  assert.strictEqual(seg0.finished, true)
+  // 原始特征 = 4 笔（s1/s3/s5/s7）；合并后 = 3 根
+  assert.deepStrictEqual(seg0.features.map((f) => f.si), [1, 3, 5, 7], 'raw features')
+  assert.strictEqual(seg0.mergedFeatures.length, 3, '合并后应少一根')
+  // 合并根：e0 覆盖 s1..s3（fromRaw5→toRaw20），高取两笔高、低取两笔高
+  assert.deepStrictEqual(
+    { fromRaw: seg0.mergedFeatures[0].fromRaw, toRaw: seg0.mergedFeatures[0].toRaw, high: seg0.mergedFeatures[0].high, low: seg0.mergedFeatures[0].low },
+    { fromRaw: 5, toRaw: 20, high: 110, low: 101 },
+    '合并根 e0 覆盖范围与高低'
+  )
+  // 未包含的独立根：范围即自身
+  assert.deepStrictEqual(
+    { fromRaw: seg0.mergedFeatures[1].fromRaw, toRaw: seg0.mergedFeatures[1].toRaw, high: seg0.mergedFeatures[1].high, low: seg0.mergedFeatures[1].low },
+    { fromRaw: 25, toRaw: 30, high: 112, low: 105 },
+    '独立根 e1'
+  )
+  assert.deepStrictEqual(
+    { fromRaw: seg0.mergedFeatures[2].fromRaw, toRaw: seg0.mergedFeatures[2].toRaw, high: seg0.mergedFeatures[2].high, low: seg0.mergedFeatures[2].low },
+    { fromRaw: 35, toRaw: 40, high: 107, low: 98 },
+    '独立根 e2（确认元素）'
+  )
+})
+
+t('特征序列·合并：随机数据下相邻合并根互不包含，且范围单调不重叠', () => {
+  for (const seed of [3, 17, 42]) {
+    const bars = randomWalk(200, seed)
+    const r = c.analyze(bars, { biMinGap: 4 })
+    for (const s of r.segments) {
+      const mf = s.mergedFeatures
+      assert(Array.isArray(mf), 'mergedFeatures 存在')
+      for (let i = 1; i < mf.length; i++) {
+        const a = mf[i - 1], b = mf[i]
+        const contained = (b.high <= a.high && b.low >= a.low) || (b.high >= a.high && b.low <= a.low)
+        assert.strictEqual(contained, false, 'seed ' + seed + ' 相邻合并根不得包含: ' + JSON.stringify([a, b]))
+        assert(b.fromRaw >= a.toRaw, 'seed ' + seed + ' 合并根时间范围不得重叠')
+      }
+    }
+  }
+})
+
 t('特征序列：增量链路与全量逐字段一致（含 features）', () => {
   for (const seed of [1, 7, 42]) {
     const bars = randomWalk(180, seed)
