@@ -22,7 +22,8 @@
     },
     indOptions: {
       volume: true,
-      macd: true
+      macd: true,
+      chinaColors: false
     }
   }
 
@@ -45,16 +46,19 @@
   const COLORS = {
     fractalTop: '#ff5b6a',
     fractalBottom: '#3fd67f',
-    strokeUp: '#ffa940',
-    strokeDown: '#40c4ff',
-    segment: '#ff4d8f',
+    strokeUp: '#ffb35c',
+    strokeDown: '#55ccff',
+    segment: '#ff5fa0',
     // 特征序列（线段内特征方向笔的虚拟K线，未做包含合并）：up=青 / down=粉
     featureUp: 'rgba(0, 229, 255, 0.9)',
     featureDown: 'rgba(255, 107, 178, 0.9)',
-    segmentCenter: 'rgba(88, 101, 242, 0.22)',
-    segmentCenterBorder: '#5865f2',
-    strokeCenter: 'rgba(180, 100, 230, 0.20)',
-    strokeCenterBorder: '#b464e6',
+    // 特征序列包含处理高亮：被合并进上一根的原始特征笔（展示算法如何处理包含关系）
+    featureMerged: '#ffd54f',
+    // 中枢方向着色：向上中枢红（缠论惯例：向上=红）、向下中枢绿
+    centerUp: 'rgba(255, 77, 143, 0.18)',
+    centerUpBorder: '#ff4d8f',
+    centerDown: 'rgba(0, 230, 118, 0.14)',
+    centerDownBorder: '#00e676',
     // 背驰标记：强背驰高亮（顶=红 / 底=绿），弱背驰半透明提示
     divergenceTopStrong: '#ff2d55',
     divergenceTopWeak: 'rgba(255, 93, 122, 0.6)',
@@ -324,6 +328,49 @@
     return result
   }
 
+  // 价格显示：按量级自适应小数位（千位以上取 1 位，小额取 6 位）
+  function fmtPrice(v) {
+    if (typeof v !== 'number' || !isFinite(v)) return ''
+    const a = Math.abs(v)
+    const d = a >= 1000 ? 1 : a >= 1 ? 2 : a >= 0.01 ? 4 : 6
+    return v.toLocaleString('zh-CN', { maximumFractionDigits: d })
+  }
+
+  // 中枢方向：价格进入中枢前的最后一条线段方向（向上中枢=红 / 向下中枢=绿）。
+  // 中枢是两段趋势之间的震荡，用“进入中枢的走向”判定最贴近缠论直觉。
+  function centerDirOf(segments, cc) {
+    let incoming = null
+    for (const s of segments) {
+      if (s.toRaw <= cc.startRaw) incoming = s
+      else break
+    }
+    if (!incoming) {
+      for (const s of segments) {
+        if (s.toRaw >= cc.startRaw) { incoming = s; break }
+      }
+    }
+    return incoming ? incoming.dir : 'up'
+  }
+
+  // 被包含合并的特征笔：raw features 中，除各合并根最左一根外，
+  // 其余被并入合并根的原始特征笔（即被包含处理“吃掉”的K线）。
+  function consumedFeatureSis(seg) {
+    const consumed = new Set()
+    const raws = seg.features
+    const merged = seg.mergedFeatures
+    if (!raws || !merged || !raws.length || !merged.length) return consumed
+    let mi = 0
+    for (let i = 0; i < raws.length; i++) {
+      const f = raws[i]
+      while (mi < merged.length && f.fromRaw > merged[mi].toRaw) mi++
+      if (mi < merged.length) {
+        const m = merged[mi]
+        if (f.fromRaw >= m.fromRaw && f.toRaw <= m.toRaw && f.fromRaw > m.fromRaw) consumed.add(f.si)
+      }
+    }
+    return consumed
+  }
+
   function drawChan({ ctx, chart, indicator, bounding, xAxis, yAxis }) {
     if (!chanState) return true
     const opts = state.chanOptions
@@ -334,25 +381,40 @@
     const X = (rawIndex) => xAxis.convertToPixel(rawIndex)
     const Y = (value) => yAxis.convertToPixel(value)
 
-    // 1. 中枢（垫底）
+    // 1. 中枢（垫底）。按方向着色：向上中枢红 / 向下中枢绿；线段中枢带上下轨价格标签
     if (opts.segmentCenter) {
+      ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
       for (const cc of visibleInRange(chanState.segmentCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
-        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), COLORS.segmentCenter, COLORS.segmentCenterBorder)
+        const up = centerDirOf(chanState.segments, cc) === 'up'
+        const fill = up ? COLORS.centerUp : COLORS.centerDown
+        const border = up ? COLORS.centerUpBorder : COLORS.centerDownBorder
+        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), fill, border)
+        // 上下轨价格标签（画在右轨外侧）
+        ctx.fillStyle = border
+        ctx.fillText(fmtPrice(cc.zsHigh), X(cc.endRaw) + 4, Y(cc.zsHigh) - 4)
+        ctx.fillText(fmtPrice(cc.zsLow), X(cc.endRaw) + 4, Y(cc.zsLow) - 1)
       }
     }
     if (opts.strokeCenter) {
       for (const cc of visibleInRange(chanState.strokeCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
-        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), COLORS.strokeCenter, COLORS.strokeCenterBorder)
+        const up = centerDirOf(chanState.segments, cc) === 'up'
+        drawCenterRect(
+          ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh),
+          up ? COLORS.centerUp : COLORS.centerDown,
+          up ? COLORS.centerUpBorder : COLORS.centerDownBorder
+        )
       }
     }
 
     // 2. 线段
     if (opts.segment) {
-      ctx.lineWidth = 2
+      ctx.lineWidth = 2.2
       ctx.strokeStyle = COLORS.segment
       for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
         ctx.beginPath()
@@ -363,17 +425,23 @@
     }
 
     // 3. 特征序列（线段特征方向的虚拟K线，raw 原始笔，不做包含合并）
+    //    被包含合并“吃掉”的原始笔用黄色高亮，直观展示包含处理过程。
     if (opts.featureSeq) {
       ctx.lineWidth = 1
       const tickW = Math.max(2, Math.min(4, gapBar * 0.3))
+      const markR = Math.max(1.5, gapBar * 0.12)
       for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
         const feats = seg.features
         if (!feats || !feats.length) continue
+        const consumed = consumedFeatureSis(seg)
         for (let i = 0; i < feats.length; i++) {
           const f = feats[i]
           if (f.toRaw < from || f.fromRaw > to) continue
           const x = X((f.fromRaw + f.toRaw) / 2)
-          ctx.strokeStyle = f.dir === 'up' ? COLORS.featureUp : COLORS.featureDown
+          const isConsumed = consumed.has(f.si)
+          ctx.strokeStyle = isConsumed
+            ? COLORS.featureMerged
+            : (f.dir === 'up' ? COLORS.featureUp : COLORS.featureDown)
           ctx.beginPath()
           ctx.moveTo(x, Y(f.high))
           ctx.lineTo(x, Y(f.low))
@@ -387,6 +455,13 @@
           ctx.moveTo(x - tickW, Y(f.toValue))
           ctx.lineTo(x + tickW, Y(f.toValue))
           ctx.stroke()
+          // 被合并的原始笔加黄色圆点，标记“被包含处理”的K线
+          if (isConsumed) {
+            ctx.fillStyle = COLORS.featureMerged
+            ctx.beginPath()
+            ctx.arc(x, Y((f.high + f.low) / 2), markR, 0, Math.PI * 2)
+            ctx.fill()
+          }
         }
       }
     }
@@ -419,7 +494,7 @@
 
     // 5. 笔
     if (opts.stroke) {
-      ctx.lineWidth = 1.4
+      ctx.lineWidth = 1.6
       for (const s of visibleInRange(chanState.strokes, (st) => st.fromRaw, (st) => st.toRaw, from, to)) {
         ctx.strokeStyle = s.dir === 'up' ? COLORS.strokeUp : COLORS.strokeDown
         ctx.beginPath()
@@ -457,28 +532,56 @@
       }
     }
 
-    // 7. 笔背驰标记（结合大级别线段动量：强背驰高亮 + 圆环，弱背驰半透明文字）
+    // 7. 笔背驰标记：▼/▲ 箭头 + 与前比较笔的虚线连接 + 趋背/盘背区分 + 强度比
+    //    强背驰（趋背，线段动量同向衰减）高亮圆点，弱背驰（盘背）空心圆环。
     if (opts.divergence && chanState.divergences) {
       ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
       ctx.textAlign = 'center'
+      ctx.textBaseline = 'alphabetic'
       ctx.lineWidth = 1
+      const setDash = typeof ctx.setLineDash === 'function' ? (on) => ctx.setLineDash(on ? [3, 3] : []) : null
       for (const d of visibleInRange(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to)) {
         const strong = d.strength === 'strong'
-        ctx.fillStyle = strong
+        const color = strong
           ? (d.kind === 'top' ? COLORS.divergenceTopStrong : COLORS.divergenceBottomStrong)
           : (d.kind === 'top' ? COLORS.divergenceTopWeak : COLORS.divergenceBottomWeak)
         const x = X(d.rawIndex)
         const yPrice = Y(d.value)
-        const label = d.kind === 'top' ? '顶背驰' : '底背驰'
-        const labelY = d.kind === 'top' ? yPrice - 16 : yPrice + 18
-        ctx.fillText(label, x, labelY)
-        if (strong) {
-          ctx.strokeStyle = ctx.fillStyle
+        // 与前一根同向比较笔的虚线连接（一眼看到“拿谁跟谁比”）
+        const prevStroke = chanState.strokes[d.prevSi]
+        if (prevStroke && setDash) {
+          ctx.strokeStyle = color
           ctx.beginPath()
-          ctx.arc(x, yPrice, 5, 0, Math.PI * 2)
+          ctx.moveTo(x, yPrice)
+          ctx.lineTo(X(prevStroke.toRaw), Y(prevStroke.toValue))
           ctx.stroke()
+          setDash(false)
+          // 强度比标注在连线中点（当前强度 / 前笔强度）
+          ctx.fillStyle = color
+          const ratio = d.momentum && typeof d.momentum.ratio === 'number' ? d.momentum.ratio : null
+          if (ratio !== null) {
+            const mx = (x + X(prevStroke.toRaw)) / 2
+            const my = (yPrice + Y(prevStroke.toValue)) / 2
+            ctx.fillText(Math.round(ratio * 100) + '%', mx, my - 5)
+          }
         }
+        // 方向箭头 + 趋背/盘背标签（顶背驰指向下跌 ▼，底背驰指向上涨 ▲）
+        const arrow = d.kind === 'top' ? '▼' : '▲'
+        const sub = strong ? '趋背' : '盘背'
+        ctx.fillStyle = color
+        ctx.font = 'bold 12px system-ui, -apple-system, "Segoe UI", sans-serif'
+        ctx.fillText(arrow, x, d.kind === 'top' ? yPrice - 12 : yPrice + 18)
+        ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
+        const label = (d.kind === 'top' ? '顶' : '底') + sub
+        ctx.fillText(label, x, d.kind === 'top' ? yPrice - 26 : yPrice + 31)
+        // 圆点（强=实心 / 弱=空心）
+        ctx.strokeStyle = color
+        ctx.beginPath()
+        ctx.arc(x, yPrice, strong ? 5 : 4, 0, Math.PI * 2)
+        if (strong) ctx.fill()
+        else ctx.stroke()
       }
+      ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
     }
 
     return true
@@ -488,8 +591,12 @@
   // 暗色主题
   // ---------------------------------------------------------------------------
   function darkStyles() {
-    // 柔和纯绿：K线阳线 / VOL / MACD 柱统一（纯绿色相 #00cc00，亮度 80%，避免 #00ff00 刺眼）
+    // 默认西式（阳=绿 / 阴=红）；chinaColors 开启后切换为中国习惯（阳=红 / 阴=绿）
+    const CHINA = !!state.indOptions.chinaColors
     const GREEN = '#00cc00'
+    const RED = '#ef5350'
+    const UP = CHINA ? RED : GREEN
+    const DOWN = CHINA ? GREEN : RED
     return {
       grid: {
         horizontal: { show: true, color: 'rgba(255,255,255,0.06)', size: 1 },
@@ -497,14 +604,14 @@
       },
       candle: {
         bar: {
-          upColor: GREEN,
-          downColor: '#ef5350',
+          upColor: UP,
+          downColor: DOWN,
           noChangeColor: '#8a8a8a',
-          upBorderColor: GREEN,
-          downBorderColor: '#ef5350',
+          upBorderColor: UP,
+          downBorderColor: DOWN,
           noChangeBorderColor: '#8a8a8a',
-          upWickColor: GREEN,
-          downWickColor: '#ef5350',
+          upWickColor: UP,
+          downWickColor: DOWN,
           noChangeWickColor: '#8a8a8a'
         },
         priceMark: {
@@ -512,8 +619,8 @@
           low: { show: true, color: 'rgba(255,255,255,0.4)', textOffset: 5, textSize: 10 },
           last: {
             show: true,
-            upColor: GREEN,
-            downColor: '#ef5350',
+            upColor: UP,
+            downColor: DOWN,
             noChangeColor: '#8a8a8a',
             line: { show: true, color: 'rgba(255,255,255,0.25)', style: 'dashed', size: 1, dashValue: [3, 3] }
           }
@@ -521,7 +628,7 @@
       },
       // VOL / MACD 柱子颜色（klinecharts 读取 styles.indicator.bars[0].upColor/downColor）
       indicator: {
-        bars: [{ upColor: GREEN }]
+        bars: [{ upColor: UP, downColor: DOWN }]
       },
       xAxis: {
         axisLine: { color: 'rgba(255,255,255,0.15)', size: 1 },
@@ -812,6 +919,10 @@
     $('#tg-divergence').addEventListener('change', (e) => toggleChanOption('divergence', e.target.checked))
     $('#tg-volume').addEventListener('change', (e) => toggleIndicator('volume', e.target.checked))
     $('#tg-macd').addEventListener('change', (e) => toggleIndicator('macd', e.target.checked))
+    $('#tg-china').addEventListener('change', (e) => {
+      state.indOptions.chinaColors = e.target.checked
+      if (chart) chart.setStyles(darkStyles())
+    })
   }
 
   // ---------------------------------------------------------------------------
@@ -851,6 +962,10 @@
       runChanCalc,
       lowerBound,
       visibleInRange,
+      fmtPrice,
+      centerDirOf,
+      consumedFeatureSis,
+      darkStyles,
       drawChan,
       get chanState() {
         return chanState

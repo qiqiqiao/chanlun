@@ -138,6 +138,103 @@ t('drawChan：横跨左边界的线段中枢被绘制（端到端回归）', () 
   assert(hit, '绘制矩形必须覆盖中枢 [1894-2990] 的 x 范围，实际: ' + JSON.stringify(fills))
 })
 
+t('centerDirOf：中枢方向 = 价格进入中枢前的最后一条线段方向', () => {
+  const app = loadApp()
+  const segments = [
+    { dir: 'up', fromRaw: 0, toRaw: 100 },
+    { dir: 'down', fromRaw: 100, toRaw: 200 },
+    { dir: 'up', fromRaw: 200, toRaw: 300 },
+    { dir: 'down', fromRaw: 300, toRaw: 400 }
+  ]
+  // 中枢 [200,300]：进入前的最后一条线段是 100-200(down) → 向下中枢
+  assert.strictEqual(app.__chanlunChart.centerDirOf(segments, { startRaw: 200, endRaw: 300 }), 'down')
+  // 中枢 [100,200]：进入前的最后一条是 0-100(up) → 向上中枢
+  assert.strictEqual(app.__chanlunChart.centerDirOf(segments, { startRaw: 100, endRaw: 200 }), 'up')
+  // 无前线段（中枢在最左）：兜底用第一条覆盖中枢起点的线段方向
+  assert.strictEqual(app.__chanlunChart.centerDirOf(segments, { startRaw: 0, endRaw: 100 }), 'up')
+})
+
+t('consumedFeatureSis：标记被包含合并吃掉的原始特征笔', () => {
+  const app = loadApp()
+  const seg = {
+    features: [
+      { si: 1, fromRaw: 5, toRaw: 10 },
+      { si: 3, fromRaw: 15, toRaw: 20 }, // 与 si1 合并
+      { si: 5, fromRaw: 25, toRaw: 30 },
+      { si: 7, fromRaw: 35, toRaw: 40 }
+    ],
+    mergedFeatures: [
+      { fromRaw: 5, toRaw: 20 }, // 覆盖 si1+si3
+      { fromRaw: 25, toRaw: 30 }, // 独立
+      { fromRaw: 35, toRaw: 40 } // 独立（确认元素）
+    ]
+  }
+  const c = app.__chanlunChart.consumedFeatureSis(seg)
+  assert.deepStrictEqual([...c].sort(), [3], '只有 si3 被合并吃掉')
+})
+
+t('fmtPrice：按量级自适应小数位', () => {
+  const app = loadApp()
+  assert.strictEqual(app.__chanlunChart.fmtPrice(43520.6), '43,520.6')
+  assert.strictEqual(app.__chanlunChart.fmtPrice(0.0000342), '0.000034')
+  assert.strictEqual(app.__chanlunChart.fmtPrice(12.345), '12.35')
+})
+
+t('drawChan：全图层开启（含特征序列/合并/背驰/方向中枢）不崩溃且每中枢一矩形', () => {
+  const app = loadApp()
+  const bars = randomWalk(3000, 123)
+  app.__chanlunChart.runChanCalc(bars)
+  const centers = app.__chanlunChart.chanState.segmentCenters
+  assert(centers.length >= 1, '数据应产生线段中枢')
+
+  const rects = []
+  const ctx = {
+    fillStyle: '', strokeStyle: '', lineWidth: 0, font: '',
+    setLineDash() {},
+    fillRect(...a) { rects.push({ kind: 'fill', ...a }) },
+    strokeRect(...a) { rects.push({ kind: 'stroke', ...a }) },
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, closePath() {}, fill() {}, arc() {}, fillText() {}
+  }
+  const chart = {
+    getVisibleRange: () => ({ realFrom: 0, realTo: 3000 }),
+    getBarSpace: () => ({ gapBar: 8, halfGapBar: 4 })
+  }
+  const xAxis = { convertToPixel: (v) => v }
+  const yAxis = { convertToPixel: (v) => 1000 - v }
+
+  // 全部图层默认开（含新特性），只跑绘制
+  const o = app.__chanlunChart.state.chanOptions
+  o.fractal = true; o.stroke = true; o.segment = true; o.featureSeq = true; o.mergedFeatureSeq = true
+  o.segmentCenter = true; o.strokeCenter = true; o.divergence = true
+
+  const ret = app.__chanlunChart.drawChan({ ctx, chart, indicator: {}, bounding: {}, xAxis, yAxis })
+  assert.strictEqual(ret, true)
+  // 关闭会用 fillRect 画K线实体的图层后，每中枢恰好 1 个填充矩形（中枢本身）
+  rects.length = 0
+  o.mergedFeatureSeq = false
+  o.featureSeq = false
+  app.__chanlunChart.drawChan({ ctx, chart, indicator: {}, bounding: {}, xAxis, yAxis })
+  const fills = rects.filter((r) => r.kind === 'fill')
+  assert.strictEqual(
+    fills.length,
+    app.__chanlunChart.chanState.segmentCenters.length + app.__chanlunChart.chanState.strokeCenters.length,
+    '全窗口下绘制全部中枢，且无额外矩形污染'
+  )
+})
+
+t('darkStyles：红涨绿跌切换生效', () => {
+  const app = loadApp()
+  app.__chanlunChart.state.indOptions.chinaColors = false
+  let s = app.__chanlunChart.darkStyles()
+  assert.strictEqual(s.candle.bar.upColor, '#00cc00', '默认阳=绿')
+  assert.strictEqual(s.indicator.bars[0].upColor, '#00cc00')
+  app.__chanlunChart.state.indOptions.chinaColors = true
+  s = app.__chanlunChart.darkStyles()
+  assert.strictEqual(s.candle.bar.upColor, '#ef5350', '红涨绿跌阳=红')
+  assert.strictEqual(s.indicator.bars[0].upColor, '#ef5350')
+  app.__chanlunChart.state.indOptions.chinaColors = false
+})
+
 t('drawChan：窗口包含中枢主体时正常绘制（不回归）', () => {
   const app = loadApp()
   const bars = randomWalk(3000, 7)
