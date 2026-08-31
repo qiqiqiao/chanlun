@@ -53,12 +53,23 @@
           <label title="MACD 标准图（DIF/DEA + 柱状线）；开启后在副图叠加背驰面积高亮"><input type="checkbox" id="tg-macd" checked> MACD</label>
           <label title="K线配色切换：西式(阳绿阴红) ⇄ 中国习惯(阳红阴绿)，VOL/MACD 柱同步"><input type="checkbox" id="tg-china"> 红涨绿跌</label>
         </div>
+        <button id="toggleLinkage" class="btn" title="多周期联动：开启时副图自动显示主图的更高一级周期（主图1h → 副图4h / 主图4h → 副图1d）">🔗 联动</button>
       </div>
     </div>
   </header>
 
   <main>
     <div id="chart"></div>
+    <div class="sub-panel">
+      <div class="sub-header">
+        <span class="sub-title" title="副图：更高一级周期的缠论结构（大级别看全局）">📈 高级别 · 多周期</span>
+        <div class="sub-controls">
+          <label class="sub-hint">副图周期</label>
+          <select id="subPeriod" title="副图周期（联动开启时自动跟随主图，关闭后可独立选择）"></select>
+        </div>
+      </div>
+      <div id="subChart"></div>
+    </div>
     <div id="loading" class="overlay hidden"><div class="spinner"></div><span>数据加载中…</span></div>
     <div id="toast" class="toast hidden"></div>
     <footer id="status" class="statusbar"></footer>
