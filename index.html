@@ -46,12 +46,12 @@
           <label><input type="checkbox" id="tg-segment" checked> 线段</label>
           <label><input type="checkbox" id="tg-featureseq" checked> 特征序列</label>
           <label><input type="checkbox" id="tg-mgfeatureseq" checked> 特征序列·合并</label>
-          <label><input type="checkbox" id="tg-segcenter" checked> 线段中枢</label>
-          <label><input type="checkbox" id="tg-strcenter"> 笔中枢</label>
-          <label><input type="checkbox" id="tg-divergence" checked> 笔背驰</label>
-          <label><input type="checkbox" id="tg-volume" checked> 交易量</label>
-          <label><input type="checkbox" id="tg-macd" checked> MACD</label>
-          <label><input type="checkbox" id="tg-china"> 红涨绿跌</label>
+          <label title="线段中枢：由3条以上线段重叠构成，级别高，粗实线红/绿框 + 上下轨价格标签"><input type="checkbox" id="tg-segcenter" checked> 线段中枢</label>
+          <label title="笔中枢：由3条以上笔重叠构成，级别低，细虚线框，框内标「笔中枢」"><input type="checkbox" id="tg-strcenter"> 笔中枢</label>
+          <label title="笔背驰：两段同向离开中枢的走势比较 MACD 动量。趋背=强背驰(实心圆点)，盘背=弱背驰(空心圆环)；MACD 副图高亮两段面积并标注 A/B"><input type="checkbox" id="tg-divergence" checked> 笔背驰</label>
+          <label title="成交量柱状图 + 均量线 MA5/10/20"><input type="checkbox" id="tg-volume" checked> 交易量</label>
+          <label title="MACD 标准图（DIF/DEA + 柱状线）；开启后在副图叠加背驰面积高亮"><input type="checkbox" id="tg-macd" checked> MACD</label>
+          <label title="K线配色切换：西式(阳绿阴红) ⇄ 中国习惯(阳红阴绿)，VOL/MACD 柱同步"><input type="checkbox" id="tg-china"> 红涨绿跌</label>
         </div>
       </div>
     </div>

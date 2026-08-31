@@ -29,6 +29,7 @@
 
   let volId = null
   let macdId = null
+  let chanDivId = null
 
   const PERIODS = [
     { label: '1m', type: 'minute', span: 1 },
@@ -54,6 +55,11 @@
     featureDown: 'rgba(255, 107, 178, 0.9)',
     // 特征序列包含处理高亮：被合并进上一根的原始特征笔（展示算法如何处理包含关系）
     featureMerged: '#ffd54f',
+    // MACD 副图面积高亮（背驰两段）：顶背驰红 / 底背驰绿
+    divAreaTopStrong: 'rgba(255, 45, 85, 0.40)',
+    divAreaTopWeak: 'rgba(255, 93, 122, 0.22)',
+    divAreaBottomStrong: 'rgba(0, 230, 118, 0.40)',
+    divAreaBottomWeak: 'rgba(63, 214, 127, 0.22)',
     // 中枢方向着色：向上中枢红（缠论惯例：向上=红）、向下中枢绿
     centerUp: 'rgba(255, 77, 143, 0.18)',
     centerUpBorder: '#ff4d8f',
@@ -290,12 +296,26 @@
       ' · 背驰 ' + strongDivs + '/' + divs.length
   }
 
-  function drawCenterRect(ctx, x, y, w, h, fill, border) {
+  // opts: { label?: 框内左上角文字, dashed?: 虚线边框（笔中枢） }
+  function drawCenterRect(ctx, x, y, w, h, fill, border, opts) {
     ctx.fillStyle = fill
     ctx.strokeStyle = border
-    ctx.lineWidth = 1
+    ctx.lineWidth = opts && opts.dashed ? 1 : 1.2
     ctx.fillRect(x, y, w, Math.max(0, h))
-    ctx.strokeRect(x, y, w, Math.max(0, h))
+    if (opts && opts.dashed && typeof ctx.setLineDash === 'function') {
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect(x, y, w, Math.max(0, h))
+      ctx.setLineDash([])
+    } else {
+      ctx.strokeRect(x, y, w, Math.max(0, h))
+    }
+    if (opts && opts.label) {
+      ctx.fillStyle = border
+      ctx.font = 'bold 9px system-ui, -apple-system, "Segoe UI", sans-serif'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
+      ctx.fillText(opts.label, x + 3, y + 2)
+    }
   }
 
   // 二分查找：首个 getKey(element) >= v 的下标（数组按 getKey 单调递增）
@@ -392,7 +412,7 @@
         const up = centerDirOf(chanState.segments, cc) === 'up'
         const fill = up ? COLORS.centerUp : COLORS.centerDown
         const border = up ? COLORS.centerUpBorder : COLORS.centerDownBorder
-        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), fill, border)
+        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), fill, border, { label: '线段中枢' })
         // 上下轨价格标签（画在右轨外侧）
         ctx.fillStyle = border
         ctx.fillText(fmtPrice(cc.zsHigh), X(cc.endRaw) + 4, Y(cc.zsHigh) - 4)
@@ -407,7 +427,8 @@
         drawCenterRect(
           ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh),
           up ? COLORS.centerUp : COLORS.centerDown,
-          up ? COLORS.centerUpBorder : COLORS.centerDownBorder
+          up ? COLORS.centerUpBorder : COLORS.centerDownBorder,
+          { label: '笔中枢', dashed: true }
         )
       }
     }
@@ -574,6 +595,17 @@
         ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
         const label = (d.kind === 'top' ? '顶' : '底') + sub
         ctx.fillText(label, x, d.kind === 'top' ? yPrice - 26 : yPrice + 31)
+        // 面积数值（面积 = 单位强度 × 窗口K线数；副图高亮失败时也有数据支撑）
+        if (d.momentum) {
+          const curS = chanState.strokes[d.si]
+          const prevS = chanState.strokes[d.prevSi]
+          if (curS && prevS) {
+            const aCur = d.momentum.current * (curS.toRaw - curS.fromRaw + 1)
+            const aPrev = d.momentum.previous * (prevS.toRaw - prevS.fromRaw + 1)
+            ctx.font = '9px system-ui, -apple-system, "Segoe UI", sans-serif'
+            ctx.fillText('A ' + aCur.toFixed(1) + ' · B ' + aPrev.toFixed(1), x, d.kind === 'top' ? yPrice - 39 : yPrice + 44)
+          }
+        }
         // 圆点（强=实心 / 弱=空心）
         ctx.strokeStyle = color
         ctx.beginPath()
@@ -584,6 +616,74 @@
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
     }
 
+    return true
+  }
+
+  // ---------------------------------------------------------------------------
+  // MACD 副图：背驰两段面积高亮（CHAN_DIV 指标附加到 MACD pane）
+  // ---------------------------------------------------------------------------
+  // 在 MACD 副图上，把每个背驰事件的「被比较两段走势」的 MACD 柱区域用半透明色
+  // 高亮（与蜡烛图 ▼/▲ 标记同一来源 chanState.divergences），并用虚线连接两段，
+  // 在各自末端标注面积数值（面积 = 动量强度 × 窗口K线数）。
+  function drawChanDiv({ ctx, chart, indicator, bounding, xAxis, yAxis }) {
+    if (!chanState || !chanState.divergences || !chanState.divergences.length) return true
+    const range = chart.getVisibleRange()
+    const { gapBar, halfGapBar } = chart.getBarSpace()
+    const from = Math.max(0, Math.floor(range.realFrom))
+    const to = Math.min(chanState.dataLen - 1, Math.ceil(range.realTo))
+    const X = (i) => xAxis.convertToPixel(i)
+    const Y = (v) => yAxis.convertToPixel(v)
+    const res = indicator.result
+    const hist = Array.isArray(res) ? res.map((r) => (r && typeof r.value === 'number' ? r.value : 0)) : null
+    if (!hist) return true
+    const y0 = Y(0)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    const dash = typeof ctx.setLineDash === 'function' ? (on) => ctx.setLineDash(on ? [2, 2] : []) : null
+    const areaColor = (d) =>
+      d.kind === 'top'
+        ? (d.strength === 'strong' ? COLORS.divAreaTopStrong : COLORS.divAreaTopWeak)
+        : (d.strength === 'strong' ? COLORS.divAreaBottomStrong : COLORS.divAreaBottomWeak)
+
+    for (const d of chanState.divergences) {
+      const cur = chanState.strokes[d.si]
+      const prev = chanState.strokes[d.prevSi]
+      if (!cur || !prev) continue
+      if (cur.toRaw < from || prev.fromRaw > to) continue
+      const color = areaColor(d)
+      ctx.fillStyle = color
+      // 两段走势的 MACD 柱区域高亮
+      for (const rng of [[prev.fromRaw, prev.toRaw], [cur.fromRaw, cur.toRaw]]) {
+        const a = Math.max(from, rng[0])
+        const b = Math.min(to, rng[1])
+        for (let i = a; i <= b && i < hist.length; i++) {
+          const h = hist[i]
+          const top = Math.min(y0, Y(h))
+          const bot = Math.max(y0, Y(h))
+          ctx.fillRect(X(i) - halfGapBar, top, gapBar, Math.max(1, bot - top))
+        }
+      }
+      // 虚线连接两段（基准段末端 → 背驰段末端）
+      if (dash) {
+        ctx.strokeStyle = color
+        ctx.lineWidth = 1
+        dash(true)
+        ctx.beginPath()
+        ctx.moveTo(X(prev.toRaw), y0)
+        ctx.lineTo(X(cur.toRaw), y0)
+        ctx.stroke()
+        dash(false)
+      }
+      // 面积数值标注（面积 = 单位强度 × 窗口K线数）
+      ctx.font = 'bold 9px system-ui, -apple-system, "Segoe UI", sans-serif'
+      ctx.fillStyle = color
+      if (d.momentum) {
+        const aPrev = d.momentum.previous * (prev.toRaw - prev.fromRaw + 1)
+        const aCur = d.momentum.current * (cur.toRaw - cur.fromRaw + 1)
+        ctx.fillText('B:' + aPrev.toFixed(1), X(prev.toRaw), y0 - 4)
+        ctx.fillText('A:' + aCur.toFixed(1), X(cur.toRaw), y0 - 4)
+      }
+    }
     return true
   }
 
@@ -800,13 +900,39 @@
     chart.setDataLoader(buildDataLoader())
   }
 
+  function createMacd() {
+    macdId = chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9] })
+    // 把「背驰面积」指标附加到 MACD 所在的 pane（失败则静默降级，不影响主图）
+    try {
+      const mi = chart.getIndicators({ id: macdId })
+      const paneId = mi && mi.length ? mi[0].paneId : null
+      // 关键：isStack=true，否则 klinecharts 会把 MACD pane 里已有的指标（含 MACD）先删掉
+      // （StoreImp.addIndicator 在 !isStack 时 removeIndicator({paneId})），导致 MACD 消失。
+      if (paneId) chanDivId = chart.createIndicator({ name: 'CHAN_DIV', paneId }, true)
+    } catch (e) {
+      chanDivId = null
+    }
+  }
+
+  function removeMacd() {
+    if (chanDivId) {
+      chart.removeIndicator({ id: chanDivId })
+      chanDivId = null
+    }
+    if (macdId) {
+      chart.removeIndicator({ id: macdId })
+      macdId = null
+    }
+  }
+
   function applyIndicators() {
     if (!chart) return
     if (state.indOptions.volume) {
-      volId = chart.createIndicator({ name: 'VOL' })
+      // VOL 带成交量均线（MA5 / MA10 / MA20）
+      volId = chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20] })
     }
     if (state.indOptions.macd) {
-      macdId = chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9] })
+      createMacd()
     }
   }
 
@@ -814,15 +940,14 @@
     state.indOptions[key] = on
     if (!chart) return
     if (on) {
-      if (key === 'volume') volId = chart.createIndicator({ name: 'VOL' })
-      else if (key === 'macd') macdId = chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9] })
+      if (key === 'volume') volId = chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20] })
+      else if (key === 'macd') createMacd()
     } else {
       if (key === 'volume') {
         chart.removeIndicator({ id: volId })
         volId = null
       } else if (key === 'macd') {
-        chart.removeIndicator({ id: macdId })
-        macdId = null
+        removeMacd()
       }
     }
   }
@@ -939,6 +1064,20 @@
       draw: drawChan
     })
 
+    // 背驰面积高亮（附加到 MACD 副图；仅当 MACD 开启时创建）
+    klinecharts.registerIndicator({
+      name: 'CHAN_DIV',
+      shortName: '背驰面积',
+      series: 'normal',
+      figures: [],
+      calc: (dataList) => {
+        const closes = dataList.map((d) => d.close)
+        const hist = window.chanlun.macdHistogram(closes, 12, 26, 9)
+        return hist.map((h) => ({ value: h }))
+      },
+      draw: drawChanDiv
+    })
+
     bindUI()
     initChart()
     setActiveState()
@@ -967,6 +1106,11 @@
       consumedFeatureSis,
       darkStyles,
       drawChan,
+      drawChanDiv,
+      createMacd,
+      __setChartForTest(ch) {
+        chart = ch
+      },
       get chanState() {
         return chanState
       }

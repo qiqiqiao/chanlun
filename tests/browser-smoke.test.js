@@ -94,6 +94,76 @@ t('realtime.js 在浏览器路径注册 window.realtime', () => {
   )
 })
 
+t('createMacd：CHAN_DIV 必须以 isStack=true 附加，不得删掉 MACD（klinecharts 回归）', () => {
+  // 复刻 klinecharts v10 StoreImp.addIndicator 的关键行为：
+  //   !isStack 时先 removeIndicator({paneId}) 再放入新指标 —— 即「不叠放就清空该 pane」。
+  // 若 CHAN_DIV 创建时漏传 isStack=true，会把 MACD pane 里的 MACD 指标清掉
+  // （真实故障：截图只剩孤立的「背驰面积」，MACD 消失）。
+  const indicators = {}
+  let seq = 0
+  const log = []
+  const mockChart = {
+    createIndicator(value, isStack) {
+      const v = typeof value === 'string' ? { name: value } : value
+      const id = v.id || (v.name + '_' + (++seq))
+      const paneId = v.paneId || ('pane_' + (++seq))
+      if (!isStack) {
+        log.push('REMOVE:' + paneId)
+        delete indicators[paneId]
+      }
+      indicators[paneId] = indicators[paneId] || []
+      indicators[paneId].push({ id, name: v.name, paneId })
+      log.push('CREATE:' + v.name + '|stack=' + !!isStack + '|pane=' + paneId)
+      return id
+    },
+    getIndicators(filter) {
+      const out = []
+      for (const p in indicators) {
+        for (const ind of indicators[p]) {
+          if (filter.id !== undefined ? ind.id === filter.id : true) {
+            if (filter.name !== undefined ? ind.name === filter.name : true) {
+              if (filter.paneId !== undefined ? ind.paneId === filter.paneId : true) out.push(ind)
+            }
+          }
+        }
+      }
+      return out
+    },
+    removeIndicator(filter) {
+      if (filter.id) for (const p in indicators) indicators[p] = indicators[p].filter((i) => i.id !== filter.id)
+    }
+  }
+
+  const sb = runBrowser(CORE_FILES)
+  const klinechartsStub = {
+    init: () => ({ setStyles() {}, setSymbol() {}, setPeriod() {}, setDataLoader() {} }),
+    dispose() {},
+    registerIndicator() {}
+  }
+  sb.klinecharts = klinechartsStub
+  sb.__CHANLUN_TEST__ = true
+  const fakeEl = {
+    addEventListener() {}, classList: { toggle() {} }, textContent: '', value: '', querySelectorAll: () => []
+  }
+  sb.document = {
+    readyState: 'loading', addEventListener() {}, querySelector: () => fakeEl, querySelectorAll: () => [],
+    createElement: () => ({ getContext: () => ({}), width: 0, height: 0, toDataURL: () => '' }), head: { appendChild() {} }
+  }
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), sb, { filename: 'main.js' })
+
+  assert(sb.__chanlunChart, '测试钩子已暴露')
+  sb.__chanlunChart.__setChartForTest(mockChart)
+  sb.__chanlunChart.createMacd()
+
+  const macd = mockChart.getIndicators({ name: 'MACD' })
+  const div = mockChart.getIndicators({ name: 'CHAN_DIV' })
+  assert.strictEqual(macd.length, 1, 'MACD 必须保留，不得被 CHAN_DIV 清掉')
+  assert.strictEqual(div.length, 1, 'CHAN_DIV 已创建')
+  assert.strictEqual(macd[0].paneId, div[0].paneId, 'CHAN_DIV 必须与 MACD 同 pane')
+  const divCreate = log.find((l) => l.startsWith('CREATE:CHAN_DIV|'))
+  assert(divCreate && /stack=true/.test(divCreate), 'CHAN_DIV 必须 isStack=true，实际: ' + JSON.stringify(log))
+})
+
 t('index.html 脚本清单可全部加载（除 CDN 与 main.js 的 DOM 依赖）', () => {
   // 按 index.html 的顺序加载核心脚本，确保没有依赖顺序错误
   const sb = runBrowser(CORE_FILES)

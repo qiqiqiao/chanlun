@@ -235,6 +235,44 @@ t('darkStyles：红涨绿跌切换生效', () => {
   app.__chanlunChart.state.indOptions.chinaColors = false
 })
 
+t('drawChanDiv：MACD副图按可见背驰绘制两段面积高亮 + 虚线连接', () => {
+  const app = loadApp()
+  const bars = randomWalk(3000, 99)
+  app.__chanlunChart.runChanCalc(bars)
+  const divs = app.__chanlunChart.chanState.divergences
+  assert(divs.length >= 1, '数据应产生背驰')
+
+  let fillRectCount = 0
+  let strokeCount = 0
+  let text = []
+  const ctx = {
+    fillStyle: '', strokeStyle: '', lineWidth: 0, font: '', textAlign: '', textBaseline: '',
+    setLineDash() {},
+    fillRect() { fillRectCount++ },
+    strokeRect() {},
+    beginPath() {}, moveTo() {}, lineTo() {},
+    stroke() { strokeCount++ },
+    fill() {}, arc() {},
+    fillText(s) { text.push(s) }
+  }
+  const chart = {
+    getVisibleRange: () => ({ realFrom: 2500, realTo: 3000 }),
+    getBarSpace: () => ({ gapBar: 8, halfGapBar: 4 })
+  }
+  const xAxis = { convertToPixel: (v) => v }
+  const yAxis = { convertToPixel: (v) => 1000 - v }
+
+  // 模拟 CHAN_DIV.calc 输出（hist，与副图 MACD 同一算法）
+  const hist = app.chanlun.macdHistogram(bars.map((b) => b.close), 12, 26, 9)
+  const indicator = { result: hist.map((h) => ({ value: h })) }
+  const ret = app.__chanlunChart.drawChanDiv({ ctx, chart, indicator, bounding: {}, xAxis, yAxis })
+  assert.strictEqual(ret, true)
+  // 有可见背驰时：至少高亮两段面积（每段多根柱 → 多个 fillRect）并绘制虚线连接
+  assert(fillRectCount > 0, '应绘制面积高亮矩形, got ' + fillRectCount)
+  assert(strokeCount >= 1, '应绘制虚线连接, got ' + strokeCount)
+  assert(text.some((t) => /^[AB]:/.test(t)), '应标注 A:/B: 面积数值, got ' + JSON.stringify(text))
+})
+
 t('drawChan：窗口包含中枢主体时正常绘制（不回归）', () => {
   const app = loadApp()
   const bars = randomWalk(3000, 7)
