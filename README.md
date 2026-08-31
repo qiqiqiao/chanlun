@@ -94,13 +94,18 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
 - `update(newBars)`：追加新K线，merge/fractal/stroke 三层精确增量
   （O(新K线数)），线段/中枢基于已增量更新的笔全量重扫（数量少、开销可接受、
   彻底避免锚漂移）；
-- `updateLast(bar)`：替换末根（收盘定型），整链重建；
+- `updateLast(bar)`：替换末根（收盘定型/实时跳动），unmerge 回退末根贡献 → merge 层
+  增量续接 → 分型窗口重判 → 笔公共前缀重放，仅尾部重扫；
 - 一致性由测试保证：增量结果与 `analyze(全部数据)` 逐字段一致。
 
 ## 线段判定（重点）
 
 线段采用《教你炒股票》67/71 课特征序列法，状态机含 `pending`（第二种情况/缺口）
 `pendingFeatures`（新线段特征序列）与否定判断（`negExtreme`）。
+
+每个线段附带 `features`（特征序列可视化数据）：扫描过程中实际用到的特征方向笔，
+按原始顺序记录（不做包含合并），含确认分型的第三个元素；第二种情况确认时，
+`pendingRaw` 作为新线段特征序列挂载。图表「特征序列」开关默认开启。
 
 > ⚠️ 已修复（2024-08）：旧版在“缺口分型被否定”时 `features.concat(pendingFeatures)`，
 > 把新线段方向（旧线段的非特征元素）混入旧线段特征序列、同时丢失待确认期间被
@@ -117,13 +122,18 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
   merged,          // 合并后K线（含 rawIndices / rawMiddle / rawStart / rawEnd）
   fractals,        // 有效分型（笔端点）
   strokes,         // 笔（si/dir/from/to/fromRaw/toRaw/fromValue/toValue/high/low）
-  segments,        // 线段（dir/from/to/fromRaw/toRaw/finished）
+  segments,        // 线段（dir/from/to/fromRaw/toRaw/finished/features）
   strokeCenters,   // 笔中枢（startIndex/endIndex/startRaw/endRaw/zsLow/zsHigh）
   segmentCenters,  // 线段中枢
   divergences,     // 笔背驰事件（见「笔背驰」一节）
   dataLen
 }
 ```
+
+`segments[].features` 是**特征序列可视化数据**：该线段特征方向的原始笔（未做包含
+合并），按扫描顺序记录，含确认分型的第三个元素；每项为
+`{ si, dir, high, low, fromRaw, toRaw, fromValue, toValue }`。图表「特征序列」
+开关默认开启，绘制为特征方向的虚拟K线（影线 + 开盘/收盘小横线）。
 
 ## 参数化
 

@@ -105,3 +105,62 @@ t('analyze 输出格式不变（关键字段齐全）', () => {
   for (const k of keys) assert(k in r, 'has ' + k)
   assert.strictEqual(r.dataLen, bars.length, 'dataLen')
 })
+
+// ---------------------------------------------------------------------------
+// 特征序列可视化数据
+// ---------------------------------------------------------------------------
+
+// 直接构造笔（绕开 merge/fractal/stroke 流水线）喂给 segmentScan
+function mkStroke(si, dir, from, to) {
+  const high = Math.max(from, to)
+  const low = Math.min(from, to)
+  return {
+    si, dir,
+    from: { high, low },
+    to: { high, low },
+    fromRaw: si * 5, toRaw: si * 5 + 5,
+    high, low, fromValue: from, toValue: to
+  }
+}
+
+t('特征序列：第一种情况（无缺口）各段 features 为特征方向原始笔', () => {
+  // 向上线段特征序列 = 向下笔 [s1, s3, s5]，s3 顶（无缺口）
+  const strokes = [
+    mkStroke(0, 'up', 100, 110),
+    mkStroke(1, 'down', 110, 100),
+    mkStroke(2, 'up', 100, 115),
+    mkStroke(3, 'down', 115, 109),
+    mkStroke(4, 'up', 109, 113),
+    mkStroke(5, 'down', 113, 106)
+  ]
+  const r = c.segmentScan(strokes, 0)
+  const seg0 = r.segments[0]
+  assert.strictEqual(seg0.dir, 'up')
+  // 特征元素 = 特征方向（down）笔，含确认分型第三个元素 s5
+  assert.deepStrictEqual(seg0.features.map((f) => f.si), [1, 3, 5], 'seg0 features s1/s3/s5')
+  for (const f of seg0.features) {
+    assert.strictEqual(f.dir, 'down', '特征方向')
+    assert('high' in f && 'low' in f && 'fromRaw' in f && 'toRaw' in f && 'fromValue' in f && 'toValue' in f, 'feature fields')
+  }
+  // 尾部未完成线段（down）的特征 = 向上笔
+  const tail = r.segments[1]
+  assert.strictEqual(tail.finished, false)
+  assert.deepStrictEqual(tail.features.map((f) => f.si), [4], 'tail features = s4(up)')
+  assert.strictEqual(tail.features[0].dir, 'up', 'tail 特征方向')
+})
+
+t('特征序列：增量链路与全量逐字段一致（含 features）', () => {
+  for (const seed of [1, 7, 42]) {
+    const bars = randomWalk(180, seed)
+    const cfg = { biMinGap: 4 }
+    const a = c.createAnalyzer(cfg)
+    a.update(bars.slice(0, 50))
+    for (let i = 50; i < bars.length; i++) {
+      a.update(bars.slice(i, i + 1))
+      const st = a.state
+      const ref = c.analyze(bars.slice(0, i + 1), cfg)
+      assert.deepStrictEqual(st.segments, ref.segments, 'seed ' + seed + ' bar ' + i + ' segments(features) 一致')
+      assert.deepStrictEqual(st, ref, 'seed ' + seed + ' bar ' + i + ' 全字段一致')
+    }
+  }
+})

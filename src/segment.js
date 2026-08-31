@@ -100,6 +100,24 @@
     let pendingFeatures = [] // 新线段的特征序列
     let j = segStart + 1
 
+    // 特征序列的可视化数据（原始笔，不做包含合并）：
+    //   curFeatures  = 当前线段的特征元素（特征方向的笔，按扫描顺序原样记录）
+    //   pendingRaw   = 第二种情况待确认期间收集的「新线段特征方向」笔（确认后成为新线段特征）
+    // 否定重放时 pendingRaw 清空、curFeatures 不受污染（重放会重新把笔加入 curFeatures），
+    // 因此最终每个线段的 features 恰好是扫描过程中用到的原始特征元素序列。
+    let curFeatures = []
+    let pendingRaw = []
+    const featureOf = (s) => ({
+      si: s.si,
+      dir: s.dir,
+      high: s.high,
+      low: s.low,
+      fromRaw: s.fromRaw,
+      toRaw: s.toRaw,
+      fromValue: s.fromValue,
+      toValue: s.toValue
+    })
+
     // 从特征分型的中间元素取线段终点（上下线段都是该元素起点处为极值点）
     const endPointOf = (si) => {
       const s = strokes[si]
@@ -127,10 +145,12 @@
           const back = pending.replayFrom
           pending = null
           pendingFeatures = []
+          pendingRaw = []
           j = back
           continue
         }
         // 新线段的特征元素（方向与 newDir 相反，即与 segDir 相同）
+        pendingRaw.push(featureOf(s))
         pushFeature(pendingFeatures, s, pending.newDir)
         const pF = findFeatureFractal(pendingFeatures, pending.newDir)
         if (pF) {
@@ -145,7 +165,8 @@
             toRaw: pp.raw,
             high: Math.max(ss.from.high, pp.high),
             low: Math.min(ss.from.low, pp.low),
-            finished: true
+            finished: true,
+            features: curFeatures
           })
           confirmedSis.push(pending.strokeIndex)
           const cp = endPointOf(pF.strokeIndex)
@@ -157,13 +178,18 @@
             toRaw: cp.raw,
             high: Math.max(pp.high, cp.high),
             low: Math.min(pp.low, cp.low),
-            finished: true
+            finished: true,
+            features: pendingRaw
           })
           confirmedSis.push(pF.strokeIndex)
-          // 从确认分型笔开始新的线段
+          // 从确认分型笔开始新的线段。pendingRaw 已作为 seg1 的特征序列（含确认
+          // 分型）挂载到上一条线段，新线段从零开始收集——它自己的特征方向与
+          // pendingRaw 相反，绝不可继承（否则会把 seg1 的特征元素混入新线段）。
           segStart = pF.strokeIndex
           segDir = strokes[segStart].dir
           features = []
+          curFeatures = []
+          pendingRaw = []
           pending = null
           pendingFeatures = []
           j = segStart + 1
@@ -178,6 +204,7 @@
         j++
         continue
       }
+      curFeatures.push(featureOf(s))
       pushFeature(features, s, segDir)
       const f1 = findFeatureFractal(features, segDir)
       if (f1) {
@@ -196,18 +223,21 @@
             toRaw: pp.raw,
             high: Math.max(ss.from.high, pp.high),
             low: Math.min(ss.from.low, pp.low),
-            finished: true
+            finished: true,
+            features: curFeatures
           })
           confirmedSis.push(f1.strokeIndex)
           segStart = f1.strokeIndex
           segDir = strokes[segStart].dir
           features = []
+          curFeatures = []
           j = segStart + 1
           continue
         } else {
           // 第二种情况：进入待确认状态（replayFrom = 触发笔之后，否定时完整重放）
           pending = { strokeIndex: f1.strokeIndex, newDir: strokes[f1.strokeIndex].dir, replayFrom: j + 1 }
           pendingFeatures = []
+          pendingRaw = []
           j++
           continue
         }
@@ -227,7 +257,8 @@
         toRaw: es.toRaw,
         high: Math.max(ss.from.high, es.to.high),
         low: Math.min(ss.from.low, es.to.low),
-        finished: false
+        finished: false,
+        features: curFeatures
       })
     }
     return { segments, confirmedSis }

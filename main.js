@@ -14,6 +14,7 @@
       fractal: true,
       stroke: true,
       segment: true,
+      featureSeq: true,
       segmentCenter: true,
       strokeCenter: false,
       divergence: true
@@ -46,6 +47,9 @@
     strokeUp: '#ffa940',
     strokeDown: '#40c4ff',
     segment: '#ff4d8f',
+    // 特征序列（线段内特征方向笔的虚拟K线，未做包含合并）：up=青 / down=粉
+    featureUp: 'rgba(0, 229, 255, 0.9)',
+    featureDown: 'rgba(255, 107, 178, 0.9)',
     segmentCenter: 'rgba(88, 101, 242, 0.22)',
     segmentCenterBorder: '#5865f2',
     strokeCenter: 'rgba(180, 100, 230, 0.20)',
@@ -357,7 +361,36 @@
       }
     }
 
-    // 3. 笔
+    // 3. 特征序列（线段特征方向的虚拟K线，raw 原始笔，不做包含合并）
+    if (opts.featureSeq) {
+      ctx.lineWidth = 1
+      const tickW = Math.max(2, Math.min(4, gapBar * 0.3))
+      for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
+        const feats = seg.features
+        if (!feats || !feats.length) continue
+        for (let i = 0; i < feats.length; i++) {
+          const f = feats[i]
+          if (f.toRaw < from || f.fromRaw > to) continue
+          const x = X((f.fromRaw + f.toRaw) / 2)
+          ctx.strokeStyle = f.dir === 'up' ? COLORS.featureUp : COLORS.featureDown
+          ctx.beginPath()
+          ctx.moveTo(x, Y(f.high))
+          ctx.lineTo(x, Y(f.low))
+          ctx.stroke()
+          // 开盘/收盘小横线（虚拟K线影线端）
+          ctx.beginPath()
+          ctx.moveTo(x - tickW, Y(f.fromValue))
+          ctx.lineTo(x + tickW, Y(f.fromValue))
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.moveTo(x - tickW, Y(f.toValue))
+          ctx.lineTo(x + tickW, Y(f.toValue))
+          ctx.stroke()
+        }
+      }
+    }
+
+    // 4. 笔
     if (opts.stroke) {
       ctx.lineWidth = 1.4
       for (const s of visibleInRange(chanState.strokes, (st) => st.fromRaw, (st) => st.toRaw, from, to)) {
@@ -369,7 +402,7 @@
       }
     }
 
-    // 4. 分型
+    // 5. 分型
     if (opts.fractal) {
       const marker = Math.max(3.5, Math.min(7, gapBar * 0.3))
       ctx.lineWidth = 1
@@ -397,7 +430,7 @@
       }
     }
 
-    // 5. 笔背驰标记（结合大级别线段动量：强背驰高亮 + 圆环，弱背驰半透明文字）
+    // 6. 笔背驰标记（结合大级别线段动量：强背驰高亮 + 圆环，弱背驰半透明文字）
     if (opts.divergence && chanState.divergences) {
       ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
       ctx.textAlign = 'center'
@@ -745,6 +778,7 @@
     $('#tg-fractal').addEventListener('change', (e) => toggleChanOption('fractal', e.target.checked))
     $('#tg-stroke').addEventListener('change', (e) => toggleChanOption('stroke', e.target.checked))
     $('#tg-segment').addEventListener('change', (e) => toggleChanOption('segment', e.target.checked))
+    $('#tg-featureseq').addEventListener('change', (e) => toggleChanOption('featureSeq', e.target.checked))
     $('#tg-segcenter').addEventListener('change', (e) => toggleChanOption('segmentCenter', e.target.checked))
     $('#tg-strcenter').addEventListener('change', (e) => toggleChanOption('strokeCenter', e.target.checked))
     $('#tg-divergence').addEventListener('change', (e) => toggleChanOption('divergence', e.target.checked))
