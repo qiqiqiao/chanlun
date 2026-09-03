@@ -1,62 +1,37 @@
-Chanlun Chart · 缠论图表
-A deterministic implementation of Chan's Theory (缠论) with real-time cryptocurrency charts, built on KLineChart v10.
+## Table of Contents
 
-Live Demo: https://chan.61116111.xyz/
+- [Features](#features)
+- [Architecture](#architecture)
+- [Core Algorithm Pipeline](#core-algorithm-pipeline)
+- [Key Technical Implementations](#key-technical-implementations)
+  - [Divergence Detection](#divergence-detection)
+  - [Real-Time Update Strategy](#real-time-update-strategy)
+  - [Incremental Calculation Engine](#incremental-calculation-engine)
+  - [Segment Determination](#segment-determination)
+- [Visualization Highlights](#visualization-highlights)
+- [Multi-Period Linking](#multi-period-linking)
+- [Configuration & Parameterization](#configuration--parameterization)
+- [Project Structure](#project-structure)
+- [Testing](#testing)
+- [Installation & Usage](#installation--usage)
 
-Table of Contents
-Features
+## Features
 
-Architecture
+- **Complete Chan Theory Pipeline**: Merging → Fractals → Strokes → Segments → Centers → Divergences.
+- **Dual-Chart Multi-Period Linking**: Main chart with a synchronized higher-timeframe sub-chart for macro-micro analysis.
+- **Real-Time Data Handling**: Robust WebSocket reconnection, exponential backoff, and a content-signature based update strategy.
+- **Incremental Calculation**: Efficiently processes new or modified K-lines, preserving consistency with full recalculation.
+- **Rich Visualization**:
+  - Stroke, segment, and center overlays with distinct styles for pen vs. segment centers.
+  - MACD histogram area highlighting for divergence zones.
+  - Volume with MA5, MA10, MA20 lines.
+  - Customizable color scheme (Western red/green for up/down, or Chinese style).
+- **Fully Parameterized**: All core algorithm thresholds are configurable via a single `config.js`.
+- **Zero-Dependency Testing**: Node.js based test suite with over 126 tests, including random stress tests and real-network integration tests.
 
-Core Algorithm Pipeline
+## Architecture
 
-Key Technical Implementations
-
-Divergence Detection
-
-Real-Time Update Strategy
-
-Incremental Calculation Engine
-
-Segment Determination
-
-Visualization Highlights
-
-Multi-Period Linking
-
-Configuration & Parameterization
-
-Project Structure
-
-Testing
-
-Installation & Usage
-
-Features
-Complete Chan Theory Pipeline: Merging → Fractals → Strokes → Segments → Centers → Divergences.
-
-Dual-Chart Multi-Period Linking: Main chart with a synchronized higher-timeframe sub-chart for macro-micro analysis.
-
-Real-Time Data Handling: Robust WebSocket reconnection, exponential backoff, and a content-signature based update strategy.
-
-Incremental Calculation: Efficiently processes new or modified K-lines, preserving consistency with full recalculation.
-
-Rich Visualization:
-
-Stroke, segment, and center overlays with distinct styles for pen vs. segment centers.
-
-MACD histogram area highlighting for divergence zones.
-
-Volume with MA5, MA10, MA20 lines.
-
-Customizable color scheme (Western red/green for up/down, or Chinese style).
-
-Fully Parameterized: All core algorithm thresholds are configurable via a single config.js.
-
-Zero-Dependency Testing: Node.js based test suite with over 126 tests, including random stress tests and real-network integration tests.
-
-Architecture
-text
+```text
 index.html         # Main entry, loads scripts in dependency order (no build step)
 │
 ├─ src/                # Core algorithm modules (UMD style, works in browser & Node)
@@ -104,8 +79,8 @@ Momentum Measurement: Σ(hist) / count, where hist = 2*(DIF-DEA) from MACD(12,26
 Real-Time Update Strategy (realtime.js)
 KLineChart reuses and mutates the last bar object in real-time. To detect changes reliably, this module uses a content signature:
 
+text
 barSignature(bar) = timestamp|open|high|low|close|volume|isBarClosed
-
 Update logic (createRealtimeUpdater):
 
 init: First load, timestamp change, or signature change of the first bar.

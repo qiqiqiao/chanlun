@@ -70,7 +70,8 @@ function loadMultiApp() {
         name: id,
         calls: { create: [] },
         createIndicator(v, isStack) {
-          this.calls.create.push([typeof v === 'string' ? v : v.name, !!isStack])
+          const val = typeof v === 'string' ? v : v.name
+          this.calls.create.push([val, v && v.calcParams ? v.calcParams : null, !!isStack])
           return id + '_ind_' + this.calls.create.length
         },
         getIndicators() { return [{ id: 'x', paneId: 'pane_' + id }] },
@@ -199,4 +200,32 @@ t('视觉联动：副图 drawChan 画主图可见范围高亮，主图画高级�
   })
   assert.strictEqual(sb.__chanlunChart.drawChan(args('chart')), true)
   assert.strictEqual(sb.__chanlunChart.drawChan(args('subChart')), true)
+})
+
+t('BOLL：主图创建布林带（20,2），副图不叠加', () => {
+  const { sb, charts } = loadMultiApp()
+  sb.__chanlunChart.state.period = { type: 'hour', span: 1 }
+  sb.__chanlunChart.initCharts()
+  const mainCalls = charts['chart'].calls.create.map((c) => c[0])
+  const subCalls = charts['subChart'].calls.create.map((c) => c[0])
+  assert(mainCalls.includes('BOLL'), '主图创建 BOLL')
+  assert(!subCalls.includes('BOLL'), '副图不叠加布林带，避免信息过载')
+  const boll = charts['chart'].calls.create.find((c) => c[0] === 'BOLL')
+  assert.deepStrictEqual(boll[1], [20, 2], 'BOLL 参数：20 周期 2 倍标准差')
+  assert.strictEqual(boll[2], false, 'BOLL 是独立 pane 的常规指标，无需 isStack=true（不像 CHAN 叠在主K线上）')
+})
+
+t('BOLL 开关：toggleIndicator 可增删', () => {
+  const { sb, charts } = loadMultiApp()
+  sb.__chanlunChart.state.period = { type: 'hour', span: 1 }
+  sb.__chanlunChart.initCharts()
+  const chart = charts['chart']
+  const bollId = sb.__chanlunChart.mainView.bollId
+  assert(bollId, '开启时持有 bollId')
+  sb.__chanlunChart.toggleIndicator('boll', false)
+  assert.strictEqual(sb.__chanlunChart.mainView.bollId, null, '关闭后清除 bollId')
+  sb.__chanlunChart.toggleIndicator('boll', true)
+  assert(sb.__chanlunChart.mainView.bollId, '重新开启后生成新 BOLL')
+  const bolls = chart.calls.create.filter((c) => c[0] === 'BOLL')
+  assert.strictEqual(bolls.length, 2, '共创建过两次 BOLL（初始 + 重新开启）')
 })

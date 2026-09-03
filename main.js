@@ -27,6 +27,7 @@
     indOptions: {
       volume: true,
       macd: true,
+      boll: true,
       chinaColors: false
     }
   }
@@ -1040,11 +1041,12 @@
       period: isMain ? state.period : (getHigherPeriod(state.period) || state.period),
       chanState: null,
       chanOptions: isMain ? { ...state.chanOptions } : { ...SUB_CHAN_OPTIONS },
-      indOptions: { volume: isMain, macd: isMain },
+      indOptions: { volume: isMain, macd: isMain, boll: isMain },
       chart: null,
       updater: createUpdater(),
       volId: null,
       macdId: null,
+      bollId: null,
       chanDivId: null
     }
     view.chart = klinecharts.init(containerId)
@@ -1103,6 +1105,10 @@
     if (view.indOptions.macd) {
       createMacd(view)
     }
+    if (view.indOptions.boll) {
+      // 布林带：20 周期，2 倍标准差（上/中/下轨）
+      view.bollId = view.chart.createIndicator({ name: 'BOLL', calcParams: [20, 2] })
+    }
   }
 
   function toggleIndicator(key, on) {
@@ -1112,12 +1118,16 @@
     if (on) {
       if (key === 'volume') view.volId = view.chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20] })
       else if (key === 'macd') createMacd(view)
+      else if (key === 'boll') view.bollId = view.chart.createIndicator({ name: 'BOLL', calcParams: [20, 2] })
     } else {
       if (key === 'volume' && view.volId) {
         view.chart.removeIndicator({ id: view.volId })
         view.volId = null
       } else if (key === 'macd') {
         removeMacd(view)
+      } else if (key === 'boll' && view.bollId) {
+        view.chart.removeIndicator({ id: view.bollId })
+        view.bollId = null
       }
     }
   }
@@ -1290,6 +1300,7 @@
     $('#tg-divergence').addEventListener('change', (e) => toggleChanOption('divergence', e.target.checked))
     $('#tg-volume').addEventListener('change', (e) => toggleIndicator('volume', e.target.checked))
     $('#tg-macd').addEventListener('change', (e) => toggleIndicator('macd', e.target.checked))
+    $('#tg-boll').addEventListener('change', (e) => toggleIndicator('boll', e.target.checked))
     $('#tg-china').addEventListener('change', (e) => {
       state.indOptions.chinaColors = e.target.checked
       for (const view of [mainView, subView]) {
@@ -1378,6 +1389,7 @@
       syncSubPeriod,
       setSubPeriod,
       initCharts,
+      toggleIndicator,
       __setChartForTest(ch) {
         // 注入 mock 图表（browser-smoke 回归测试）：挂到兜底视图上
         ensureFallbackView()
