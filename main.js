@@ -10,10 +10,6 @@
     exchange: 'binance',
     symbol: 'BTCUSDT',
     period: { type: 'day', span: 1 },
-    // 多周期联动：subChart 展示主图的更高一级周期；联动开关关闭时副图可独立选周期
-    linkage: {
-      enabled: true
-    },
     chanOptions: {
       fractal: true,
       stroke: true,
@@ -32,18 +28,6 @@
     }
   }
 
-  // 副图默认只显示高级别核心信号，避免信息过载
-  const SUB_CHAN_OPTIONS = {
-    fractal: false,
-    stroke: true,
-    segment: true,
-    featureSeq: false,
-    mergedFeatureSeq: false,
-    segmentCenter: true,
-    strokeCenter: false,
-    divergence: true
-  }
-
   const PERIODS = [
     { label: '1m', type: 'minute', span: 1 },
     { label: '5m', type: 'minute', span: 5 },
@@ -59,11 +43,6 @@
   const labelOf = (period) => {
     const p = PERIODS.find((x) => x.type === period.type && x.span === period.span)
     return p ? p.label : ''
-  }
-  // 更高一级周期：1m→5m→15m→30m→1h→4h→1d→1w；1w 已到顶（返回 null）
-  function getHigherPeriod(period) {
-    const i = PERIODS.findIndex((p) => p.type === period.type && p.span === period.span)
-    return i >= 0 && i < PERIODS.length - 1 ? PERIODS[i + 1] : null
   }
 
   const QUICK_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'DOGEUSDT']
@@ -93,19 +72,13 @@
     divergenceTopStrong: '#ff2d55',
     divergenceTopWeak: 'rgba(255, 93, 122, 0.6)',
     divergenceBottomStrong: '#00e676',
-    divergenceBottomWeak: 'rgba(63, 214, 127, 0.55)',
-    // 多周期联动：副图上主图可见时间范围高亮 / 主图上高级别K线边界虚线
-    linkageBand: 'rgba(88, 101, 242, 0.14)',
-    linkageBandBorder: 'rgba(88, 101, 242, 0.7)',
-    subBoundary: 'rgba(255, 255, 255, 0.12)'
+    divergenceBottomWeak: 'rgba(63, 214, 127, 0.55)'
   }
 
-  // 每个图表视图独立的运行状态（主图 / 副图 / 测试兜底视图）
-  //  klinecharts 的自定义指标回调能拿到 indicator.id，用它反查所属视图，
-  //  保证两个图表的数据、计算结果、显示开关完全隔离。
+  // 每个图表视图独立的运行状态（主图 / 测试兜底视图）
+  //  klinecharts 的自定义指标回调能拿到 indicator.id，用它反查所属视图。
   const viewByIndicatorId = new Map()
   let mainView = null
-  let subView = null
   let fallbackView = null
   let faviconSymbol = null
 
@@ -466,37 +439,6 @@
     const X = (rawIndex) => xAxis.convertToPixel(rawIndex)
     const Y = (value) => yAxis.convertToPixel(value)
 
-    // 0. 多周期视觉联动（副图）：高亮主图当前可见的时间范围
-    if (view.isSub && state.linkage.enabled && mainView && mainView.chanState && mainView.chart) {
-      const mList = mainView.chart.getDataList()
-      const mRange = mainView.chart.getVisibleRange()
-      const tsToPx = (ts) => {
-        const fn = typeof xAxis.convertTimestampToPixel === 'function' ? xAxis.convertTimestampToPixel.bind(xAxis) : null
-        if (!fn) return null
-        return fn(ts)
-      }
-      const t0 = mList && mList.length && mList[Math.max(0, Math.floor(mRange.realFrom))]
-      const t1 = mList && mList.length && mList[Math.min(mList.length - 1, Math.ceil(mRange.realTo))]
-      if (t0 && t1 && typeof tsToPx === 'function') {
-        const x0 = tsToPx(t0.timestamp)
-        const x1 = tsToPx(t1.timestamp)
-        if (x0 !== null && x1 !== null) {
-          ctx.fillStyle = COLORS.linkageBand
-          ctx.fillRect(x0, bounding.top, Math.max(1, x1 - x0), bounding.height)
-          ctx.strokeStyle = COLORS.linkageBandBorder
-          ctx.lineWidth = 1
-          ctx.beginPath()
-          ctx.moveTo(x0, bounding.top)
-          ctx.lineTo(x0, bounding.bottom)
-          ctx.stroke()
-          ctx.beginPath()
-          ctx.moveTo(x1, bounding.top)
-          ctx.lineTo(x1, bounding.bottom)
-          ctx.stroke()
-        }
-      }
-    }
-
     // 1. 中枢（垫底）。按方向着色：向上中枢红 / 向下中枢绿；线段中枢带上下轨价格标签
     if (opts.segmentCenter) {
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
@@ -710,33 +652,6 @@
         else ctx.stroke()
       }
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
-    }
-
-    // 8. 多周期视觉联动（主图）：画出副图（高级别）K线边界，标出大级别位置
-    if (view.isMain && state.linkage.enabled && subView && subView.chart) {
-      const sList = subView.chart.getDataList()
-      const tsToPx = typeof xAxis.convertTimestampToPixel === 'function' ? xAxis.convertTimestampToPixel.bind(xAxis) : null
-      if (sList && sList.length && tsToPx) {
-        // 主图可见时间范围
-        const mList = chart.getDataList() || []
-        const mFrom = mList[from]
-        const mTo = mList[to]
-        if (mFrom && mTo && typeof ctx.setLineDash === 'function') {
-          ctx.strokeStyle = COLORS.subBoundary
-          ctx.lineWidth = 1
-          ctx.setLineDash([2, 4])
-          for (const b of sList) {
-            if (b.timestamp < mFrom.timestamp) continue
-            if (b.timestamp > mTo.timestamp) break
-            const px = tsToPx(b.timestamp)
-            ctx.beginPath()
-            ctx.moveTo(px, bounding.top)
-            ctx.lineTo(px, bounding.bottom)
-            ctx.stroke()
-          }
-          ctx.setLineDash([])
-        }
-      }
     }
 
     return true
@@ -998,13 +913,12 @@
 
   function resetChanCalc() {
     resetView(mainView)
-    resetView(subView)
     if (fallbackView) resetView(fallbackView)
     updateStatus()
   }
 
   // klinecharts v10 数据加载器（data-layer.js 实现：init/forward/backward 分页 + 实时订阅）。
-  // 主副图共享同一个 klineCache（键 = 交易所:品种:周期），避免两个周期重复请求。
+  // 共享 klineCache（键 = 交易所:品种:周期），避免重复请求同周期数据。
   function buildDataLoader(view) {
     return window.dataLayer.createKlineLoader({
       getExchange: currentExchange,
@@ -1020,27 +934,15 @@
     })
   }
 
-  // 副图点击：把主图滚动到该高级别K线对应的时间，看小周期细节。
-  // klinecharts 的点击事件是 Crosshair 结构（含 timestamp / kLineData），两者都接受。
-  function handleSubBarClick(data) {
-    if (!mainView || !mainView.chart || !data) return
-    const ts = typeof data.timestamp === 'number' ? data.timestamp : data.kLineData && data.kLineData.timestamp
-    if (typeof ts !== 'number') return
-    if (typeof mainView.chart.scrollToTimestamp === 'function') {
-      mainView.chart.scrollToTimestamp(ts, 500)
-    }
-  }
-
   // 创建单个图表视图：独立的 klinecharts 实例 + 缠论状态 + 显示开关 + 加载器
   function createChartView({ containerId, isMain }) {
     const view = {
       isMain,
-      isSub: !isMain,
       symbol: state.symbol,
       exchange: state.exchange,
-      period: isMain ? state.period : (getHigherPeriod(state.period) || state.period),
+      period: state.period,
       chanState: null,
-      chanOptions: isMain ? { ...state.chanOptions } : { ...SUB_CHAN_OPTIONS },
+      chanOptions: { ...state.chanOptions },
       indOptions: { volume: isMain, macd: isMain, boll: isMain },
       chart: null,
       updater: createUpdater(),
@@ -1057,9 +959,6 @@
     view.chart.setSymbol({ ticker: state.symbol })
     view.chart.setPeriod(view.period)
     view.chart.setDataLoader(buildDataLoader(view))
-    if (!isMain) {
-      view.chart.subscribeAction('onCandleBarClick', handleSubBarClick)
-    }
     return view
   }
 
@@ -1133,60 +1032,11 @@
   }
 
   // 副图周期同步：联动开启时跟随主图的更高一级周期
-  function syncSubPeriod() {
-    if (!subView || !mainView || !state.linkage.enabled) {
-      updateSubPeriodUI()
-      return
-    }
-    const hp = getHigherPeriod(state.period)
-    if (hp && labelOf(subView.period) !== labelOf(hp)) {
-      subView.period = hp
-      resetView(subView)
-      subView.chart.setPeriod(hp)
-    }
-    updateSubPeriodUI()
-  }
-
-  // 副图独立选周期（联动关闭时）
-  function setSubPeriod(period) {
-    if (!subView || !subView.chart) return
-    subView.period = period
-    resetView(subView)
-    subView.chart.setPeriod(period)
-    updateSubPeriodUI()
-  }
-
-  function updateSubPeriodUI() {
-    const sel = $('#subPeriod')
-    if (!sel) return
-    const linked = state.linkage.enabled
-    const target = linked ? getHigherPeriod(state.period) : subView.period
-    sel.disabled = linked
-    if (target) sel.value = labelOf(target)
-    const btn = $('#toggleLinkage')
-    if (btn) btn.classList.toggle('active', linked)
-  }
-
-  function populateSubPeriodSelect() {
-    const sel = $('#subPeriod')
-    if (!sel || sel.options.length) return
-    for (const p of PERIODS) {
-      const opt = document.createElement('option')
-      opt.value = p.label
-      opt.textContent = p.label
-      sel.appendChild(opt)
-    }
-  }
-
   function initCharts() {
     resetChanCalc()
     if (mainView && mainView.chart) klinecharts.dispose(mainView.chart)
-    if (subView && subView.chart) klinecharts.dispose(subView.chart)
-    populateSubPeriodSelect()
     mainView = createChartView({ containerId: 'chart', isMain: true })
     window.__chart = mainView.chart
-    subView = createChartView({ containerId: 'subChart', isMain: false })
-    updateSubPeriodUI()
     refreshTabInfo()
   }
 
@@ -1196,19 +1046,6 @@
     mainView.symbol = state.symbol
     mainView.chart.setSymbol({ ticker: state.symbol })
     mainView.chart.setPeriod(state.period)
-    if (subView && subView.chart) {
-      subView.symbol = state.symbol
-      subView.chart.setSymbol({ ticker: state.symbol })
-      // 联动开启时副图跟随主图的更高一级周期；关闭时保持副图独立周期
-      if (state.linkage.enabled) {
-        const hp = getHigherPeriod(state.period) || state.period
-        if (labelOf(subView.period) !== labelOf(hp)) {
-          subView.period = hp
-          subView.chart.setPeriod(hp)
-        }
-      }
-    }
-    updateSubPeriodUI()
     refreshTabInfo()
   }
 
@@ -1243,11 +1080,10 @@
 
   function toggleChanOption(key, on) {
     state.chanOptions[key] = on
-    if (mainView) mainView.chanOptions[key] = on
-    if (subView) subView.chanOptions[key] = on
-    for (const view of [mainView, subView]) {
-      if (view && view.chart) {
-        view.chart.overrideIndicator({ name: 'CHAN', paneId: 'candle_pane', extendData: { ...view.chanOptions } })
+    if (mainView) {
+      mainView.chanOptions[key] = on
+      if (mainView.chart) {
+        mainView.chart.overrideIndicator({ name: 'CHAN', paneId: 'candle_pane', extendData: { ...mainView.chanOptions } })
       }
     }
   }
@@ -1303,21 +1139,7 @@
     $('#tg-boll').addEventListener('change', (e) => toggleIndicator('boll', e.target.checked))
     $('#tg-china').addEventListener('change', (e) => {
       state.indOptions.chinaColors = e.target.checked
-      for (const view of [mainView, subView]) {
-        if (view && view.chart) view.chart.setStyles(darkStyles())
-      }
-    })
-
-    // 多周期联动开关
-    $('#toggleLinkage').addEventListener('click', () => {
-      state.linkage.enabled = !state.linkage.enabled
-      if (state.linkage.enabled) syncSubPeriod()
-      else updateSubPeriodUI()
-    })
-    // 副图独立选周期（联动关闭时可用）
-    $('#subPeriod').addEventListener('change', (e) => {
-      const period = periodOf(e.target.value)
-      if (period) setSubPeriod(period)
+      if (mainView && mainView.chart) mainView.chart.setStyles(darkStyles())
     })
   }
 
@@ -1379,15 +1201,10 @@
       drawChan,
       drawChanDiv,
       createMacd,
-      getHigherPeriod,
       periodOf,
       labelOf,
       resolveView,
       resetView,
-      createChartView,
-      handleSubBarClick,
-      syncSubPeriod,
-      setSubPeriod,
       initCharts,
       toggleIndicator,
       __setChartForTest(ch) {
@@ -1398,9 +1215,6 @@
       },
       get mainView() {
         return mainView
-      },
-      get subView() {
-        return subView
       },
       get chanState() {
         return mainView ? mainView.chanState : fallbackView ? fallbackView.chanState : null

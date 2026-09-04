@@ -175,64 +175,8 @@ main {
   left: 0;
   right: 0;
   top: 0;
-  bottom: 268px; /* 主图上方，副图面板在下方 */
+  bottom: 0;
   background: #000000; /* K线背景纯黑 */
-}
-
-/* 多周期联动副图面板 */
-.sub-panel {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 268px;
-  border-top: 1px solid var(--border);
-  background: #000000;
-}
-
-.sub-header {
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-}
-
-.sub-title {
-  font-size: 11px;
-  color: var(--text-dim);
-  letter-spacing: 1px;
-}
-
-.sub-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sub-hint {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-#subChart {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 28px;
-  bottom: 0;
-}
-
-/* 联动开关激活态 */
-#toggleLinkage {
-  border: 1px solid var(--border);
-}
-#toggleLinkage.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
 }
 
 /* 加载遮罩 */
@@ -281,12 +225,12 @@ main {
   max-width: 80%;
 }
 
-/* 底部状态栏（位于主图与副图面板之间） */
+/* 底部状态栏 */
 .statusbar {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 268px;
+  bottom: 0;
   padding: 4px 10px;
   font-size: 11px;
   color: var(--text-dim);
