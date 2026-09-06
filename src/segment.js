@@ -17,6 +17,17 @@
  *   - 新线段方向（= 旧线段特征方向）的笔：可能是旧线段特征序列的延续；
  *   - 旧线段方向（= 新线段特征方向）的笔：构成新线段特征序列（待确认分型）。
  *
+ * ── 线段破坏（扩展规则，非 67/71 课字面内容）─────────────────────
+ * 实战常用：段延续期间，若某笔极值超越段起点极值（向上段：某笔 low <
+ * 起点 low；向下段：某笔 high > 起点 high），旧段在破坏笔起点处终结
+ * （= 前一笔终点，同向极值点，段端点极性不变），新段从破坏笔开始反向。
+ * 否则特征序列高点不断抬高/低点不断走低时（如 71 课规则下）段永远不终结，
+ * 会吞掉整个牛市/熊市（如 BTC 周线 2024-2026：向下段内包 124k 新高）。
+ * 破坏检查在每笔循环最先执行（优先于待确认 pending），触发时丢弃 pending。
+ * 开关：cfg.segment.destroyOnBreach（默认 true；设 false 回到纯字面规则）。
+ * 被破坏终结的段标记 destroyed: true。
+ * ────────────────────────────────────────────────────────────────
+ *
  * 旧版实现被否定时 `features = features.concat(pendingFeatures)`，这是错的：
  * pendingFeatures 是“新线段方向”的笔（对继续延伸的旧线段而言是非特征元素），
  * 而真正的旧线段特征元素（新线段方向的笔）在待确认期间被跳过、丢失了。
@@ -107,9 +118,10 @@
   }
 
   // 从 segStart（已确认线段终点所在笔的索引）开始恢复扫描
-  function segmentScan(strokes, segStart) {
+  function segmentScan(strokes, segStart, cfg) {
+    const destroyOnBreach = !cfg || !cfg.segment || cfg.segment.destroyOnBreach !== false
     const segments = []
-    const confirmedSis = [] // 每次确认线段的终点笔索引（供增量锚点维护）
+    const confirmedSis = [] // 确认锚点：下段扫描起点（正常终结=分型终点笔；破坏终结=破坏笔）。供恢复扫描/增量锚点维护
     const n = strokes.length
 
     let segDir = strokes[segStart].dir
@@ -147,6 +159,49 @@
 
     while (j < n) {
       const s = strokes[j]
+
+      // ---- 线段破坏：超越段起点极值，旧段在破坏笔起点终结，新段反向 ----
+      // 只对已确立的段生效（≥3 笔）：1-2 笔的段尚未成立（线段至少三笔），
+      // 对其执行破坏只会产生 1 笔退化段并引发噪声级联；形成期波动由三笔
+      // 最小长度自然吸收
+      if (destroyOnBreach && j - segStart >= 3) {
+        const ss0 = strokes[segStart]
+        const breached = segDir === 'up'
+          ? s.low < ss0.from.low
+          : s.high > ss0.from.high
+        if (breached) {
+          const pp = { point: s.from, raw: s.fromRaw, high: s.from.high, low: s.from.low }
+          segments.push({
+            dir: segDir,
+            from: ss0.from,
+            to: pp.point,
+            fromRaw: ss0.fromRaw,
+            toRaw: pp.raw,
+            high: Math.max(ss0.from.high, pp.high),
+            low: Math.min(ss0.from.low, pp.low),
+            finished: true,
+            destroyed: true,
+            features: curFeatures,
+            mergedFeatures: features
+          })
+          // 推入新段起点 j（而非终结笔 j-1）：正常终结推入的本就是
+          // “终点兼下段起点”，恢复扫描协议依赖“最后锚点=下段起点”；
+          // 破坏把两者拆开（终结点 j-1 ≠ 新起点 j），推 j 才能保证
+          // segmentScan(strokes, anchor) 与全量尾部一致
+          confirmedSis.push(j)
+          // 破坏笔必与旧段反向（同向笔极值不可能先超越起点而触发）：
+          // 新段从破坏笔开始，状态清零后等价于正常扫描起点
+          segStart = j
+          segDir = s.dir
+          features = []
+          curFeatures = []
+          pendingRaw = []
+          pending = null
+          pendingFeatures = []
+          j = segStart + 1
+          continue
+        }
+      }
 
       // ---- 第二种情况：正在等待新线段特征序列的分型确认 ----
       if (pending) {
@@ -299,7 +354,7 @@
       start++
     }
     if (start + 2 >= n) return []
-    return segmentScan(strokes, start).segments
+    return segmentScan(strokes, start, cfg).segments
   }
 
   // 全量（含确认锚点），供 createAnalyzer 初始化使用
@@ -312,7 +367,7 @@
       start++
     }
     if (start + 2 >= n) return { segments: [], confirmedSis: [] }
-    return segmentScan(strokes, start)
+    return segmentScan(strokes, start, cfg)
   }
 
   const api = { overlap3, pushFeature, findFeatureFractal, segmentScan, calcSegments, calcSegmentsFull }

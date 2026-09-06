@@ -5,7 +5,8 @@
  *   bi.minGap        ：笔内合并K线的最小间隔（两端分型的 mi 差）
  *   fractal.mode     ：'strict' 顶分型要求 high/low 双高，底分型双低；
  *                      'relaxed' 只比较对应端
- *   segment.method   ：特征序列法（当前仅此一种口径）
+  *   segment.method   ：特征序列法（当前仅此一种口径）
+  *   segment.destroyOnBreach：线段破坏扩展规则（默认开）
  *   center.minElements：中枢最少元素数（笔/线段）
  *   divergence.*     ：笔背驰（MACD 柱面积动量 + 大级别=线段动量确认）
  *
@@ -22,7 +23,8 @@
       mode: 'strict' // strict：顶分型要求 high/low 双高，底分型双低；relaxed：只比较对应端
     },
     segment: {
-      method: 'feature-sequence' // 特征序列法（当前仅此一种口径）
+      method: 'feature-sequence', // 特征序列法（当前仅此一种口径）
+      destroyOnBreach: true // 线段破坏：超越段起点极值即终结（扩展规则；false 回纯字面规则）
     },
     center: {
       minElements: 3 // 中枢最少元素数（笔/线段）

@@ -42,9 +42,9 @@ const sig = (r) => JSON.stringify({
 // （特征序列重放出无缺口顶分型），线段应终结于 raw=45。
 // ---------------------------------------------------------------------------
 const REGRESSION = [
-  { seed: 52, n: 92, sis: [9, 34, 79], segs: ['up:0-45F', 'down:45-170F', 'up:170-395F', 'down:395-460O'] },
-  { seed: 145, n: 65, sis: [9, 12, 19, 42], segs: ['up:0-45F', 'down:45-60F', 'up:60-95F', 'down:95-210F', 'up:210-325O'] },
-  { seed: 209, n: 69, sis: [11, 32, 49, 54, 57, 64], segs: ['down:0-55F', 'up:55-160F', 'down:160-245F', 'up:245-270F', 'down:270-285F', 'up:285-320F', 'down:320-345O'] }
+  { seed: 52, n: 92, sis: [3, 6, 11, 40, 79], segs: ['up:0-15F', 'down:15-30F', 'up:30-55F', 'down:55-200F', 'up:200-395F', 'down:395-460O'] },
+  { seed: 145, n: 65, sis: [9, 14, 17, 40, 43, 46, 53, 56, 59, 62], segs: ['up:0-45F', 'down:45-70F', 'up:70-85F', 'down:85-200F', 'up:200-215F', 'down:215-230F', 'up:230-265F', 'down:265-280F', 'up:280-295F', 'down:295-310F', 'up:310-325O'] },
+  { seed: 209, n: 69, sis: [11, 16, 21, 24, 27, 32, 53, 56, 63, 66], segs: ['down:0-55F', 'up:55-80F', 'down:80-105F', 'up:105-120F', 'down:120-135F', 'up:135-160F', 'down:160-265F', 'up:265-280F', 'down:280-315F', 'up:315-330F', 'down:330-345O'] }
 ]
 
 t('回归：缺口分型被否定时线段终点不漂移（旧版 bug）', () => {
@@ -180,6 +180,19 @@ t('回归：否定重放不丢交错笔（完整重放语义）', () => {
       let j = segStart + 1
       while (j < nn) {
         const s = strokes2[j]
+        // 镜像主实现的线段破坏（含 ≥3 笔 guard），保持重放等价性断言覆盖新规则
+        if (j - segStart >= 3) {
+          const ss0 = strokes2[segStart]
+          const breached = segDir === 'up' ? s.low < ss0.from.low : s.high > ss0.from.high
+          if (breached) {
+            segments.push({ dir: segDir, fromRaw: strokes2[segStart].fromRaw, toRaw: s.fromRaw, finished: true })
+            segStart = j
+            segDir = s.dir
+            features = []; pending = null; pendingFeatures = []
+            j = segStart + 1
+            continue
+          }
+        }
         if (pending) {
           if (s.dir === pending.newDir) { j++; continue }
           const negExtreme = segDir === 'up'
@@ -257,6 +270,76 @@ t('从最后确认锚点恢复扫描与全量一致', () => {
       'seed ' + seed
     )
   }
+})
+
+// ---------------------------------------------------------------------------
+// 线段破坏（扩展规则）：超越段起点极值即终结，新段反向
+// ---------------------------------------------------------------------------
+t('破坏：向下段被反弹超越起点 → 旧段终结于破坏笔起点，新上段开始', () => {
+  // 下段 s0(30→5)，随后反弹笔 s3 高 32 超起点 30 → 破坏
+  const strokes = [
+    mk(0, 'down', 30, 5),
+    mk(1, 'up', 5, 20),
+    mk(2, 'down', 20, 12),
+    mk(3, 'up', 12, 32), // high 32 > 起点 30 → 破坏
+    mk(4, 'down', 32, 25),
+    mk(5, 'up', 25, 28)
+  ]
+  const r = c.segmentScan(strokes, 0)
+  assert.strictEqual(r.segments.length, 2)
+  const d0 = r.segments[0]
+  assert.strictEqual(d0.dir, 'down')
+  assert.strictEqual(d0.finished, true)
+  assert.strictEqual(d0.destroyed, true, '标记破坏终结')
+  assert.deepStrictEqual([d0.fromRaw, d0.toRaw], [0, 15], '终结于破坏笔起点 s3.from')
+  const n1 = r.segments[1]
+  assert.strictEqual(n1.dir, 'up', '新段反向')
+  assert.strictEqual(n1.fromRaw, 15, '新段从破坏笔开始，首尾相接')
+  assert.strictEqual(n1.finished, false)
+  // 恢复扫描协议：最后锚点 = 新段起点
+  assert.strictEqual(r.confirmedSis[r.confirmedSis.length - 1], 3)
+})
+
+t('破坏：向上段被下跌超越起点 → 对称处理', () => {
+  const strokes = [
+    mk(0, 'up', 100, 110),
+    mk(1, 'down', 110, 105),
+    mk(2, 'up', 105, 108),
+    mk(3, 'down', 108, 95), // low 95 < 起点 100 → 破坏
+    mk(4, 'up', 95, 99)
+  ]
+  const r = c.segmentScan(strokes, 0)
+  assert.strictEqual(r.segments.length, 2)
+  assert.strictEqual(r.segments[0].destroyed, true)
+  assert.deepStrictEqual([r.segments[0].fromRaw, r.segments[0].toRaw], [0, 15])
+  assert.strictEqual(r.segments[1].dir, 'down')
+  assert.strictEqual(r.segments[1].fromRaw, 15)
+})
+
+t('破坏 guard：段不足 3 笔时不触发（避免 1-2 笔退化段）', () => {
+  const strokes = [
+    mk(0, 'down', 30, 5),
+    mk(1, 'up', 5, 32) // 高 32 超起点 30，但段仅 1 笔 → 忽略
+  ]
+  const r = c.segmentScan(strokes, 0)
+  assert.strictEqual(r.segments.length, 1, '单条开口段')
+  assert.strictEqual(r.segments[0].finished, false)
+  assert.strictEqual(r.segments[0].destroyed, undefined)
+})
+
+t('破坏开关：destroyOnBreach=false 回到纯字面规则（段吞反弹）', () => {
+  const strokes = [
+    mk(0, 'down', 30, 5),
+    mk(1, 'up', 5, 20),
+    mk(2, 'down', 20, 12),
+    mk(3, 'up', 12, 32),
+    mk(4, 'down', 32, 25),
+    mk(5, 'up', 25, 28)
+  ]
+  const off = c.normalizeConfig({ segment: { destroyOnBreach: false } })
+  const r = c.segmentScan(strokes, 0, off)
+  assert.strictEqual(r.segments.length, 1, '无破坏：单条开口段')
+  assert.strictEqual(r.segments[0].destroyed, undefined)
 })
 
 // ---------------------------------------------------------------------------

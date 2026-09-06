@@ -97,7 +97,7 @@ t('visibleInRange：窗口完全包含中枢 / 多个中枢', () => {
 
 t('drawChan：横跨左边界的线段中枢被绘制（端到端回归）', () => {
   const app = loadApp()
-  // 数据：seed 99 的 3000 根随机K线 → 线段中枢 [1894-2990]
+  // 数据：seed 99 的 3000 根随机K线 → 线段中枢 [2221-2990]（破坏规则下）
   const bars = randomWalk(3000, 99)
   app.__chanlunChart.runChanCalc(bars)
   const centers = app.__chanlunChart.chanState.segmentCenters
@@ -133,9 +133,9 @@ t('drawChan：横跨左边界的线段中枢被绘制（端到端回归）', () 
 
   const fills = rects.filter((r) => r.kind === 'fill')
   assert(fills.length >= 1, '窗口 [2500,3000] 下必须绘制线段中枢（旧版漏画）')
-  // 找到对应 [1894-2990] 中枢的矩形：x = 1894 - 4 = 1890, w = (2990-1894) + 8 = 1104
-  const hit = fills.find((r) => Math.abs(r.x - 1890) < 0.01 && Math.abs(r.w - 1104) < 0.01)
-  assert(hit, '绘制矩形必须覆盖中枢 [1894-2990] 的 x 范围，实际: ' + JSON.stringify(fills))
+  // 找到对应 [2221-2990] 中枢的矩形：x = 2221 - 4 = 2217, w = (2990-2221) + 8 = 777
+  const hit = fills.find((r) => Math.abs(r.x - 2217) < 0.01 && Math.abs(r.w - 777) < 0.01)
+  assert(hit, '绘制矩形必须覆盖中枢 [2221-2990] 的 x 范围，实际: ' + JSON.stringify(fills))
 })
 
 t('centerDirOf：中枢方向 = 价格进入中枢前的最后一条线段方向', () => {

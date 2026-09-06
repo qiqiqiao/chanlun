@@ -68,16 +68,16 @@ const FIXTURES = {
     }
   },
   wave: {
-    meta: '五段趋势 + 区间 + 突破：多笔、笔中枢、单条未完成向下线段',
+    meta: '五段趋势 + 区间 + 突破：多笔、笔中枢、突破破坏向下段后转向上开口段',
     bars: barsFrom(buildWaveSeq()),
     expect: {
       raw: 99,
       merged: 72,
       fractals: 8,
       strokes: 7,
-      segments: 1,
-      finishedSegments: 0,
-      lastSegment: { dir: 'down', fromRaw: 10, toRaw: 87, finished: false },
+      segments: 2,
+      finishedSegments: 1,
+      lastSegment: { dir: 'up', fromRaw: 38, toRaw: 87, finished: false },
       strokeCenters: 2,
       segmentCenters: 0
     }
@@ -98,17 +98,17 @@ const FIXTURES = {
     }
   },
   random: {
-    meta: '确定性随机游走（seed 42）：含已终结线段与笔中枢',
+    meta: '确定性随机游走（seed 42）：含破坏终结线段与笔中枢/线段中枢',
     bars: randomWalk(300, 42),
     expect: {
       raw: 300,
       merged: 145,
       fractals: 18,
       strokes: 17,
-      segments: 2,
-      finishedSegments: 1,
+      segments: 4,
+      finishedSegments: 3,
       strokeCenters: 1,
-      segmentCenters: 0
+      segmentCenters: 1
     }
   }
 }

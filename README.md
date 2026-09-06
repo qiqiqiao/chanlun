@@ -109,6 +109,8 @@ Each segment includes a features array for visualization: the actual, direction-
 
 Critical Fix (2024-08): Corrected a bug where features incorrectly merged pending features on negation. Regression tests cover seeds 52, 145, and 209.
 
+Segment destruction (extension rule, not literal Lessons 67/71): while a segment extends, if any stroke's extreme exceeds the segment-start extreme (up: stroke low < start low; down: stroke high > start high), the old segment ends at the breaching stroke's start and a new reversed segment begins there (marked `destroyed: true`). Only applies to established segments (≥3 strokes). Without this, a rising feature sequence never prints the ending fractal and one segment swallows an entire bull/bear market (e.g. BTC weekly 2024–2026: a down segment containing the 124k top). Disable via `config.segment.destroyOnBreach = false` to restore the pure literal rule.
+
 Visualization Highlights
 Centers (Pivots):
 

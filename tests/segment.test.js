@@ -80,6 +80,7 @@ t('前三笔重叠 → 起点确立 → 尾部未完成线段', () => {
     { si: 2, dir: 'down', from: { high: 32, low: 12 }, to: { high: 28, low: 8 }, fromRaw: 10, toRaw: 15, high: 32, low: 8 } // 三者共区 [10,30]∩[12,25]
   ]
   const segs = c.calcSegments(strokes, c.normalizeConfig())
+  // s1.high=32 虽超出下段起点 30，但段仅 1 笔未确立 → 破坏不触发（≥3 笔 guard）
   assert.strictEqual(segs.length, 1, 'one open segment')
   assert.strictEqual(segs[0].finished, false, 'unfinished tail')
   assert.strictEqual(segs[0].fromRaw, 0)
@@ -165,9 +166,11 @@ t('特征序列·合并：包含元素合并成一根K线，范围覆盖全部�
   const seg0 = r.segments[0]
   assert.strictEqual(seg0.dir, 'up')
   assert.strictEqual(seg0.finished, true)
-  // 原始特征 = 4 笔（s1/s3/s5/s7）；合并后 = 3 根
-  assert.deepStrictEqual(seg0.features.map((f) => f.si), [1, 3, 5, 7], 'raw features')
-  assert.strictEqual(seg0.mergedFeatures.length, 3, '合并后应少一根')
+  // s7.low=98 跌破上段起点 100 → 线段破坏：段终结于 s7.from，s7 归属新下段
+  assert.strictEqual(seg0.destroyed, true, 's7 破坏起点')
+  // 原始特征 = 3 笔（s1/s3/s5）；合并后 = 2 根
+  assert.deepStrictEqual(seg0.features.map((f) => f.si), [1, 3, 5], 'raw features')
+  assert.strictEqual(seg0.mergedFeatures.length, 2, '合并后应少一根')
   // 合并根：e0 覆盖 s1..s3（fromRaw5→toRaw20），高取两笔高、低取两笔高
   assert.deepStrictEqual(
     { fromRaw: seg0.mergedFeatures[0].fromRaw, toRaw: seg0.mergedFeatures[0].toRaw, high: seg0.mergedFeatures[0].high, low: seg0.mergedFeatures[0].low },
@@ -180,11 +183,11 @@ t('特征序列·合并：包含元素合并成一根K线，范围覆盖全部�
     { fromRaw: 25, toRaw: 30, high: 112, low: 105 },
     '独立根 e1'
   )
-  assert.deepStrictEqual(
-    { fromRaw: seg0.mergedFeatures[2].fromRaw, toRaw: seg0.mergedFeatures[2].toRaw, high: seg0.mergedFeatures[2].high, low: seg0.mergedFeatures[2].low },
-    { fromRaw: 35, toRaw: 40, high: 107, low: 98 },
-    '独立根 e2（确认元素）'
-  )
+  // s7 开启新下段（开口），特征序列尚未收集
+  const tail = r.segments[1]
+  assert.strictEqual(tail.dir, 'down')
+  assert.strictEqual(tail.finished, false)
+  assert.strictEqual(tail.fromRaw, 35)
 })
 
 t('特征序列·合并：随机数据下相邻合并根互不包含，且范围单调不重叠', () => {
