@@ -193,12 +193,16 @@
         try {
           let data = []
           let more
+          // 分页边界由交易所适配器换算（各家包含/排除语义不同，见 beforeParam/afterParam；
+          // 缺省保持 Binance 口径：老向取整、新向 +1ms）
+          const beforeOf = ex.beforeParam || ((ts) => ts)
+          const afterOf = ex.afterParam || ((ts) => ts + 1)
           if (type === 'init') {
             const cached = cache.get(key)
             if (cached && cached.length) {
               // 复用缓存：左边界保持在上次起点，只补齐更晚出现的K线
               const lastTs = cached[cached.length - 1].timestamp
-              const newer = await ex.fetchKlines(ticker, period, { limit: 1000, after: lastTs + 1 })
+              const newer = await ex.fetchKlines(ticker, period, { limit: 1000, after: afterOf(lastTs) })
               if (newer.length) cache.merge(key, newer)
               data = cache.get(key)
             } else {
@@ -208,11 +212,11 @@
             }
             more = { forward: true, backward: true }
           } else if (type === 'forward') {
-            data = await ex.fetchKlines(ticker, period, { limit: 1000, before: timestamp })
+            data = await ex.fetchKlines(ticker, period, { limit: 1000, before: beforeOf(timestamp) })
             if (data.length) cache.merge(key, data)
             more = { forward: data.length > 0, backward: false }
           } else if (type === 'backward') {
-            data = await ex.fetchKlines(ticker, period, { limit: 1000, after: timestamp + 1 })
+            data = await ex.fetchKlines(ticker, period, { limit: 1000, after: afterOf(timestamp) })
             if (data.length) cache.merge(key, data)
             more = { forward: false, backward: data.length > 0 }
           } else {

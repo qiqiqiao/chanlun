@@ -102,41 +102,60 @@
     classify: (e) => (e instanceof ExchangeError ? { retryable: e.retryable } : { retryable: true })
   })
 
-  // 拉取并解析 JSON，统一分类 HTTP 错误
-  async function fetchJson(url) {
-    return retryFetch(async () => {
-      let res
+  // 拉取并解析 JSON，统一分类 HTTP 错误。
+  // 单次请求超时（默认 15s，AbortController）：fetch 本身无超时， hung 住的
+  // 连接会让 getBars 永远不 settle → 加载蒙层永久不消失（周线切换时偶发）。
+  // 超时按可重试错误处理，走指数退避重试；3 次后 onError 吐司 + 回调空数组，
+  // loading 必定清除。
+  const FETCH_TIMEOUT_MS = 15000
+  // 单次请求（无重试）：超时 + 传输层错误分类。重试由调用方按需包装，
+  // 以便 OKX 这类“业务错误码也需重试”的场景把整次（请求+业务校验）包进重试。
+  async function fetchJsonOnce(url, timeoutMs) {
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null
+    let res
+    try {
       try {
-        res = await fetch(url)
+        res = ctrl ? await fetch(url, { signal: ctrl.signal }) : await fetch(url)
       } catch (e) {
-        throw new ExchangeError('网络错误：' + e.message, { retryable: true })
+        const aborted = (e && e.name === 'AbortError') || (ctrl && ctrl.signal.aborted)
+        throw new ExchangeError(
+          aborted ? '请求超时（' + Math.round(timeoutMs / 1000) + 's）' : '网络错误：' + (e && e.message),
+          { retryable: true }
+        )
       }
-      if (res.ok) {
-        let text
-        try {
-          text = await res.text()
-        } catch (e) {
-          throw new ExchangeError('读取响应失败', { retryable: true })
-        }
-        try {
-          return JSON.parse(text)
-        } catch (e) {
-          throw new ExchangeError('响应解析失败', { retryable: true })
-        }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    if (res.ok) {
+      let text
+      try {
+        text = await res.text()
+      } catch (e) {
+        throw new ExchangeError('读取响应失败', { retryable: true })
       }
-      const status = res.status
-      if (status === 429) {
-        throw new ExchangeError('交易所限流 HTTP 429', { status, retryable: true })
+      try {
+        return JSON.parse(text)
+      } catch (e) {
+        throw new ExchangeError('响应解析失败', { retryable: true })
       }
-      // HTTP 418 通常表示 IP 已被封禁/风控，重试无意义甚至加重封禁 → 不重试
-      if (status === 418) {
-        throw new ExchangeError('IP 被交易所风控 HTTP 418', { status, retryable: false })
-      }
-      if (status >= 500) {
-        throw new ExchangeError('交易所服务错误 HTTP ' + status, { status, retryable: true })
-      }
-      throw new ExchangeError('请求失败 HTTP ' + status, { status, retryable: false })
-    })
+    }
+    const status = res.status
+    if (status === 429) {
+      throw new ExchangeError('交易所限流 HTTP 429', { status, retryable: true })
+    }
+    // HTTP 418 通常表示 IP 已被封禁/风控，重试无意义甚至加重封禁 → 不重试
+    if (status === 418) {
+      throw new ExchangeError('IP 被交易所风控 HTTP 418', { status, retryable: false })
+    }
+    if (status >= 500) {
+      throw new ExchangeError('交易所服务错误 HTTP ' + status, { status, retryable: true })
+    }
+    throw new ExchangeError('请求失败 HTTP ' + status, { status, retryable: false })
+  }
+  async function fetchJson(url, opts) {
+    const timeoutMs = (opts && opts.timeout) || FETCH_TIMEOUT_MS
+    return retryFetch(() => fetchJsonOnce(url, timeoutMs))
   }
 
   // WebSocket 自动重连由 data-layer.js 提供（指数退避 + 抖动；close 后不再重连）
@@ -156,6 +175,11 @@
         if (type === 'week') return '1w'
         return '1d'
       },
+      // 分页边界换算（loader 传“时间方向语义”的 before=更老 / after=更新）：
+      // Binance endTime/startTime 均含边界 → 老向直接取整（边界重取由去重消化），
+      // 新向 +1ms 排除边界。
+      beforeParam: (timestamp) => timestamp,
+      afterParam: (timestamp) => timestamp + 1,
       async fetchKlines(symbol, period, opts = {}) {
         const p = new URLSearchParams({
           symbol: this.normalize(symbol),
@@ -204,20 +228,29 @@
       periodWss(type, span) {
         return 'candle' + this.periodStr(type, span)
       },
+      // OKX 分页游标与时间方向相反（实测确认）：HTTP `after=X` 返回比 X 更老的K线，
+      // `before=X` 返回更新的K线；且两侧均为开区间（不含边界）。因此 loader 的
+      // before（更老）→ HTTP after，after（更新）→ HTTP before，且无需 ±1。
+      beforeParam: (timestamp) => timestamp,
+      afterParam: (timestamp) => timestamp,
       async fetchKlines(symbol, period, opts = {}) {
         const p = new URLSearchParams({
           instId: this.normalize(symbol),
           bar: this.periodStr(period.type, period.span),
           limit: String(Math.min(opts.limit || 300, 300))
         })
-        if (opts.before) p.set('before', opts.before)
-        if (opts.after) p.set('after', opts.after)
+        if (opts.before) p.set('after', opts.before)
+        if (opts.after) p.set('before', opts.after)
         const url = 'https://www.okx.com/api/v5/market/candles?' + p.toString()
-        const json = await fetchJson(url)
-        if (json.code !== '0') {
-          const retryable = ['50013', '50014', '50028', '50111', '50114', '51001'].includes(String(json.code))
-          throw new ExchangeError('OKX ' + (json.msg || json.code), { status: Number(json.code) || 0, retryable })
-        }
+        // 业务错误码（尤其限流 50013）与传输层一起重试：整次请求包进 retryFetch
+        const json = await retryFetch(async () => {
+          const j = await fetchJsonOnce(url, FETCH_TIMEOUT_MS)
+          if (j.code !== '0') {
+            const retryable = ['50013', '50014', '50028', '50111', '50114', '51001'].includes(String(j.code))
+            throw new ExchangeError('OKX ' + (j.msg || j.code), { status: Number(j.code) || 0, retryable })
+          }
+          return j
+        })
         const arr = (json.data || []).slice().reverse()
         return arr.map((k) => ({ timestamp: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }))
       },
@@ -1191,6 +1224,7 @@
       state,
       klineCache,
       buildDataLoader,
+      fetchJson,
       runChanCalc,
       lowerBound,
       visibleInRange,

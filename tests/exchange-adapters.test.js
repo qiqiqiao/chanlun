@@ -21,7 +21,7 @@ const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js'
 
 // 在浏览器模拟环境加载真实 main.js（init 延迟，不触碰真实 DOM）
 function loadApp(fetchImpl) {
-  const sb = { console, __CHANLUN_TEST__: true, fetch: fetchImpl }
+  const sb = { console, __CHANLUN_TEST__: true, fetch: fetchImpl, URLSearchParams, URL }
   sb.window = sb
   sb.globalThis = sb
   sb.WebSocket = class { constructor() { throw new Error('no real WS') } }
@@ -29,7 +29,7 @@ function loadApp(fetchImpl) {
   sb.clearTimeout = () => {}
   const fakeEl = {
     addEventListener() {},
-    classList: { toggle() {} },
+    classList: { toggle() {}, remove() {}, add() {} },
     textContent: '',
     value: '',
     querySelectorAll: () => []
@@ -63,19 +63,25 @@ function routeFetch(routes) {
   return fn
 }
 
-// OKX 模拟：升序 history（原始数组 [ts,o,h,l,c,vol,...]），降序返回，limit≤300
+// OKX 模拟：升序 history（原始数组 [ts,o,h,l,c,vol,...]），降序返回，limit≤300。
+// 真实 OKX 语义（实测确认）：HTTP before=X 返回更新的（ts>X），after=X 返回更老的
+// （ts<X），两侧开区间。适配器负责把 loader 的时间方向语义换算过来。
 function okxApi(history) {
-  return (url) => {
-    const p = new URL(url).searchParams
+  const calls = []
+  const fn = (url) => {
+    calls.push(String(url))
+    const p = new URL(String(url)).searchParams
     const limit = Math.min(+(p.get('limit') || 300), 300)
     const before = p.get('before')
     const after = p.get('after')
     let rows = history
-    if (before !== null) rows = rows.filter((r) => r[0] < +before)
-    if (after !== null) rows = rows.filter((r) => r[0] > +after)
+    if (before !== null) rows = rows.filter((r) => r[0] > +before)
+    if (after !== null) rows = rows.filter((r) => r[0] < +after)
     const page = rows.slice(-limit).reverse() // OKX 返回降序（最新在前）
     return { ok: true, status: 200, text: async () => JSON.stringify({ code: '0', msg: '', data: page }) }
   }
+  fn.calls = calls
+  return fn
 }
 
 function rawBars(n, start = 1, step = 1) {
@@ -105,26 +111,30 @@ t('OKX fetchKlines：URL 参数 / limit 300 上限 / 降序→升序映射', asy
   assert.strictEqual(p.get('limit'), '300', 'OKX limit 上限 300')
 })
 
-t('OKX before/after 分页参数透传', async () => {
+t('OKX before/after 分页参数换算（游标与时间方向相反）', async () => {
   const history = rawBars(100)
   const sb = loadApp(okxApi(history))
   const okx = sb.__chanlunChart.exchangers.okx
+  // loader 的 before=更老 → HTTP after（OKX after 取更老侧）
   await okx.fetchKlines('BTC-USDT', { type: 'day', span: 1 }, { before: 50 })
   let p = new URL(sb.fetch.calls[0]).searchParams
-  assert.strictEqual(p.get('before'), '50')
-  assert.strictEqual(p.get('after'), null)
+  assert.strictEqual(p.get('after'), '50')
+  assert.strictEqual(p.get('before'), null)
+  // loader 的 after=更新 → HTTP before（OKX before 取更新侧）
   await okx.fetchKlines('BTC-USDT', { type: 'day', span: 1 }, { after: 60 })
   p = new URL(sb.fetch.calls[1]).searchParams
-  assert.strictEqual(p.get('after'), '60')
+  assert.strictEqual(p.get('before'), '60')
+  assert.strictEqual(okx.beforeParam(50), 50, 'OKX 两侧开区间，无需 ±1')
+  assert.strictEqual(okx.afterParam(60), 60)
 })
 
 t('OKX code !== 0：50013 可重试 / 未知 code 不重试', async () => {
-  const sb = loadApp(() => ({ ok: true, status: 200, text: async () => JSON.stringify({ code: '50013', msg: 'Rate limit' }) }))
+  const sb = loadApp(routeFetch([{ match: /okx\.com/, body: { code: '50013', msg: 'Rate limit' } }]))
   const okx = sb.__chanlunChart.exchangers.okx
   await assert.rejects(() => okx.fetchKlines('BTC-USDT', { type: 'day', span: 1 }, {}), (e) => e.name === 'ExchangeError')
   assert.strictEqual(sb.fetch.calls.length, 3, '50013 可重试 → 3 次')
 
-  const sb2 = loadApp(() => ({ ok: true, status: 200, text: async () => JSON.stringify({ code: '1', msg: 'bad' }) }))
+  const sb2 = loadApp(routeFetch([{ match: /okx\.com/, body: { code: '1', msg: 'bad' } }]))
   const okx2 = sb2.__chanlunChart.exchangers.okx
   await assert.rejects(() => okx2.fetchKlines('BTC-USDT', { type: 'day', span: 1 }, {}))
   assert.strictEqual(sb2.fetch.calls.length, 1, '未知 code 不重试')
@@ -140,7 +150,8 @@ t('Binance fetchKlines：URL / 映射 / 418 不重试 / 5xx 重试', async () =>
   const binance = sb.__chanlunChart.exchangers.binance
   const bars = await binance.fetchKlines('BTCUSDT', { type: 'day', span: 1 }, { limit: 1000, before: 123 })
   assert.strictEqual(bars.length, 1)
-  assert.deepStrictEqual(bars[0], { timestamp: 1, open: 10, high: 11, low: 9, close: 10.5, volume: 100 })
+  // 跨 vm 上下文对象原型不同，deepStrictEqual 会误判 → 用 JSON 比较
+  assert.strictEqual(JSON.stringify(bars[0]), JSON.stringify({ timestamp: 1, open: 10, high: 11, low: 9, close: 10.5, volume: 100 }))
   const p = new URL(okRoute.calls[0]).searchParams
   assert.strictEqual(p.get('symbol'), 'BTCUSDT')
   assert.strictEqual(p.get('interval'), '1d')
@@ -171,14 +182,15 @@ t('OKX 分页集成：init → forward 翻历史 → backward 补新 → 去重�
   const loader = app.buildDataLoader()
   const period = { type: 'day', span: 1 }
   const symbol = { ticker: 'BTC-USDT' }
-  const key = 'OKX:BTC-USDT:day-1'
+  // 缓存键用交易所周期串（OKX 日线 = 1D），不是内部 day-1
+  const key = 'OKX:BTC-USDT:1D'
 
   // init：最新 300 根
   let r = await callLoader(loader, { type: 'init', symbol, period })
   assert.strictEqual(r.data.length, 300)
   assert.strictEqual(r.data[0].timestamp, 701, 'init 左边界 701')
-  assert.deepStrictEqual(r.more, { forward: true, backward: true })
-  assert.deepStrictEqual(app.klineCache.get(key).map((b) => b.timestamp), Array.from({ length: 300 }, (_, i) => 701 + i))
+  assert.strictEqual(JSON.stringify(r.more), '{"forward":true,"backward":true}')
+  assert.strictEqual(JSON.stringify(app.klineCache.get(key).map((b) => b.timestamp)), JSON.stringify(Array.from({ length: 300 }, (_, i) => 701 + i)), '跨 vm 上下文用 JSON 比较')
 
   // forward 翻页（更旧）：直到 1
   for (const expectedLeft of [401, 101, 1]) {

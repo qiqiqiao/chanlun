@@ -222,20 +222,22 @@ t('加载器：init 无缓存 → 拉取并写缓存', async () => {
 
 t('加载器：init 有缓存 → 只补齐更新的K线（左边界固定）', async () => {
   const ex = new FakeExchange({
-    '{"limit":1000,"after":11}': [bar(12, 12), bar(13, 13)]
+    '{"limit":1000,"after":12}': [bar(12, 12), bar(13, 13)]
   })
   const env = mkLoader(ex)
   env.cache.set('Fake:BTC:day-1', [bar(10, 10), bar(11, 11)])
   let cbArgs = null
   await env.loader.getBars({ type: 'init', symbol: { ticker: 'BTC' }, period: { type: 'day', span: 1 }, callback: (d, more) => { cbArgs = { d, more } } })
   assert.deepStrictEqual(cbArgs.d.map((b) => b.timestamp), [10, 11, 12, 13], '缓存首根 10 保持，补齐 12/13')
-  assert.deepStrictEqual(ex.calls[0].opts, { limit: 1000, after: 11 })
+  // loader 发 after:lastTs+1（边界排除，避免重取 lastTs 本根；Binance startTime 含边界）
+  assert.deepStrictEqual(ex.calls[0].opts, { limit: 1000, after: 12 })
 })
 
 t('加载器：forward/backward 分页合并去重', async () => {
   const ex = new FakeExchange({
     '{"limit":1000,"before":11}': [bar(8, 8), bar(9, 9), bar(10, 10)],
-    '{"limit":1000,"after":12}': [bar(13, 13), bar(14, 14), bar(10, 10)]
+    // backward 发 after:timestamp+1（边界排除，与 init 补齐一致）
+    '{"limit":1000,"after":13}': [bar(13, 13), bar(14, 14), bar(10, 10)]
   })
   const env = mkLoader(ex)
   env.cache.set('Fake:BTC:day-1', [bar(10, 10), bar(11, 11), bar(12, 12)])

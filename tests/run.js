@@ -24,23 +24,28 @@ for (const f of files) {
   require(f)
 }
 
-let pass = 0
-let fail = 0
-for (const t of tests) {
-  try {
-    t.fn()
-    console.log('  \u2713 ' + t.name)
-    pass++
-  } catch (e) {
-    console.error('  \u2717 ' + t.name)
-    console.error('    ' + String(e && e.message).split('\n').join('\n    '))
-    if (e && e.stack) {
-      const lines = e.stack.split('\n').filter((l) => l.includes('.test.js') || l.includes('tests/'))
-      for (const l of lines.slice(0, 4)) console.error('    ' + l.trim())
+async function main() {
+  let pass = 0
+  let fail = 0
+  for (const t of tests) {
+    try {
+      // 同步与异步用例都支持：返回 Promise 则等待（超时类回归测试需要）
+      await t.fn()
+      console.log('  \u2713 ' + t.name)
+      pass++
+    } catch (e) {
+      console.error('  \u2717 ' + t.name)
+      console.error('    ' + String(e && e.message).split('\n').join('\n    '))
+      if (e && e.stack) {
+        const lines = e.stack.split('\n').filter((l) => l.includes('.test.js') || l.includes('tests/'))
+        for (const l of lines.slice(0, 4)) console.error('    ' + l.trim())
+      }
+      fail++
     }
-    fail++
   }
+
+  console.log('\n' + pass + ' passed, ' + fail + ' failed' + (files.length ? '  [' + files.map((f) => path.basename(f)).join(', ') + ']' : ''))
+  process.exit(fail ? 1 : 0)
 }
 
-console.log('\n' + pass + ' passed, ' + fail + ' failed' + (files.length ? '  [' + files.map((f) => path.basename(f)).join(', ') + ']' : ''))
-process.exit(fail ? 1 : 0)
+main()
