@@ -246,3 +246,16 @@ main {
 .hidden {
   display: none !important;
 }
+
+/* CDN 图表库加载失败提示 */
+.cdn-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  color: #ef5350;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
+}

@@ -9,7 +9,6 @@
   - [Incremental Calculation Engine](#incremental-calculation-engine)
   - [Segment Determination](#segment-determination)
 - [Visualization Highlights](#visualization-highlights)
-- [Multi-Period Linking](#multi-period-linking)
 - [Configuration & Parameterization](#configuration--parameterization)
 - [Project Structure](#project-structure)
 - [Testing](#testing)
@@ -18,7 +17,6 @@
 ## Features
 
 - **Complete Chan Theory Pipeline**: Merging → Fractals → Strokes → Segments → Centers → Divergences.
-- **Dual-Chart Multi-Period Linking**: Main chart with a synchronized higher-timeframe sub-chart for macro-micro analysis.
 - **Real-Time Data Handling**: Robust WebSocket reconnection, exponential backoff, and a content-signature based update strategy.
 - **Incremental Calculation**: Efficiently processes new or modified K-lines, preserving consistency with full recalculation.
 - **Rich Visualization**:
@@ -27,7 +25,7 @@
   - Volume with MA5, MA10, MA20 lines.
   - Customizable color scheme (Western red/green for up/down, or Chinese style).
 - **Fully Parameterized**: All core algorithm thresholds are configurable via a single `config.js`.
-- **Zero-Dependency Testing**: Node.js based test suite with over 126 tests, including random stress tests and real-network integration tests.
+- **Zero-Dependency Testing**: Node.js based test suite with 125 tests, including random stress tests and real-network integration tests.
 
 ## Architecture
 
@@ -137,29 +135,6 @@ features: Original strokes (raw) as candlestick-like bars.
 mergedFeatures: Containment-merged feature bars.
 
 Merged bars are highlighted with yellow dots/overlays.
-
-Multi-Period Linking:
-
-Sub-chart shows the next higher timeframe.
-
-Bi-directional visual linking: highlighted time range on the sub-chart, and higher-level period boundaries on the main chart.
-
-Multi-Period Linking
-A sub-chart panel displays the next higher timeframe (e.g., 4h when main is 1h).
-
-Linkage Toggle: When on (default), the sub-chart period follows the main chart. When off, the sub-chart can be set independently.
-
-Click to Drill: Clicking a bar on the sub-chart scrolls the main chart to that time range.
-
-Visual Anchors:
-
-Sub-chart highlights the main chart's visible time range.
-
-Main chart draws dashed vertical lines at the boundaries of the sub-chart's bars.
-
-Data Isolation: Each chart has its own KLineChart instance, Chan state machine, and display options.
-
-Caching: Both charts share the same klineCache keyed by exchange:symbol:period to prevent duplicate network requests.
 
 Configuration & Parameterization
 You can pass a config object to chanlun.analyze(bars, config):

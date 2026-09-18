@@ -47,6 +47,83 @@
 
   const QUICK_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'DOGEUSDT']
 
+  // ---------------------------------------------------------------------------
+  // UI 状态持久化（localStorage）：交易所/品种/周期/全部显示开关，刷新后恢复
+  // ---------------------------------------------------------------------------
+  const UI_STATE_KEY = 'chanlun.ui.v1'
+
+  // 可持久化的布尔开关：[state 分组, 键, 对应复选框 id]
+  const TOGGLES = [
+    ['chanOptions', 'fractal', 'tg-fractal'],
+    ['chanOptions', 'stroke', 'tg-stroke'],
+    ['chanOptions', 'segment', 'tg-segment'],
+    ['chanOptions', 'featureSeq', 'tg-featureseq'],
+    ['chanOptions', 'mergedFeatureSeq', 'tg-mgfeatureseq'],
+    ['chanOptions', 'segmentCenter', 'tg-segcenter'],
+    ['chanOptions', 'strokeCenter', 'tg-strcenter'],
+    ['chanOptions', 'divergence', 'tg-divergence'],
+    ['indOptions', 'volume', 'tg-volume'],
+    ['indOptions', 'macd', 'tg-macd'],
+    ['indOptions', 'boll', 'tg-boll'],
+    ['indOptions', 'chinaColors', 'tg-china']
+  ]
+
+  // 恢复上次会话的 UI 状态。逐字段白名单校验：存储损坏/缺字段/篡改值都退回默认。
+  // localStorage 不可用（隐私模式、file:// 限制）时静默跳过，不影响功能。
+  function loadPersistedState() {
+    let saved
+    try {
+      saved = JSON.parse(localStorage.getItem(UI_STATE_KEY) || 'null')
+    } catch (e) {
+      return
+    }
+    if (!saved || typeof saved !== 'object') return
+    if (saved.exchange === 'binance' || saved.exchange === 'okx') state.exchange = saved.exchange
+    if (typeof saved.symbol === 'string') {
+      const s = saved.symbol.trim().toUpperCase()
+      if (s && s.length <= 24) state.symbol = s
+    }
+    if (
+      saved.period &&
+      PERIODS.some((p) => p.type === saved.period.type && p.span === saved.period.span)
+    ) {
+      state.period = { type: saved.period.type, span: saved.period.span }
+    }
+    for (const [group, key] of TOGGLES) {
+      const g = saved[group]
+      if (g && typeof g === 'object' && typeof g[key] === 'boolean') state[group][key] = g[key]
+    }
+  }
+
+  function saveState() {
+    try {
+      localStorage.setItem(
+        UI_STATE_KEY,
+        JSON.stringify({
+          exchange: state.exchange,
+          symbol: state.symbol,
+          period: state.period,
+          chanOptions: state.chanOptions,
+          indOptions: state.indOptions
+        })
+      )
+    } catch (e) {
+      /* 写失败（配额/隐私模式）不影响运行 */
+    }
+  }
+
+  // 把恢复后的状态同步到顶部栏控件（select / 输入框 / 复选框勾选态）
+  function syncControlsFromState() {
+    const ex = $('#exchange')
+    if (ex) ex.value = state.exchange
+    const sym = $('#symbol')
+    if (sym) sym.value = state.symbol
+    for (const [group, key, id] of TOGGLES) {
+      const el = $('#' + id)
+      if (el) el.checked = !!state[group][key]
+    }
+  }
+
   const COLORS = {
     fractalTop: '#ff5b6a',
     fractalBottom: '#3fd67f',
@@ -329,17 +406,29 @@
     return fallbackView
   }
 
+  // CHAN calc 的返回值不被消费（figures 为空）：单项共享 + 按视图/长度缓存数组，
+  // 避免每次计算分配数千个 { v: 0 } 对象
+  const ZERO_RESULT_ITEM = { v: 0 }
+  function zeroResultFor(view, n) {
+    let arr = view.zeroResult
+    if (!arr || arr.length !== n) {
+      arr = new Array(n).fill(ZERO_RESULT_ITEM)
+      view.zeroResult = arr
+    }
+    return arr
+  }
+
   function runChanCalc(dataList, indicator) {
     const view = resolveView(indicator)
     const n = dataList.length
     if (!n) {
       if (view.isMain) updateStatus()
-      return dataList.map(() => ({ v: 0 }))
+      return zeroResultFor(view, n)
     }
     const r = view.updater.update(dataList)
     view.chanState = r.state
     if (view.isMain) updateStatus()
-    return dataList.map(() => ({ v: 0 }))
+    return zeroResultFor(view, n)
   }
 
   function updateStatus() {
@@ -443,11 +532,20 @@
 
   // 被包含合并的特征笔：raw features 中，除各合并根最左一根外，
   // 其余被并入合并根的原始特征笔（即被包含处理“吃掉”的K线）。
+  // 段实例内 features/mergedFeatures 不变，结果按段缓存：绘制热路径
+  // （滚动/缩放/十字线每次重绘）避免对每个可见线段重复分配 Set 并重算。
+  // WeakMap 以段对象为键，线段重算（全量重建新对象）后缓存自动失效。
+  const consumedSisCache = new WeakMap()
   function consumedFeatureSis(seg) {
-    const consumed = new Set()
+    let consumed = consumedSisCache.get(seg)
+    if (consumed) return consumed
+    consumed = new Set()
     const raws = seg.features
     const merged = seg.mergedFeatures
-    if (!raws || !merged || !raws.length || !merged.length) return consumed
+    if (!raws || !merged || !raws.length || !merged.length) {
+      consumedSisCache.set(seg, consumed)
+      return consumed
+    }
     let mi = 0
     for (let i = 0; i < raws.length; i++) {
       const f = raws[i]
@@ -457,6 +555,7 @@
         if (f.fromRaw >= m.fromRaw && f.toRaw <= m.toRaw && f.fromRaw > m.fromRaw) consumed.add(f.si)
       }
     }
+    consumedSisCache.set(seg, consumed)
     return consumed
   }
 
@@ -1019,6 +1118,7 @@
   function removeMacd(view) {
     if (!view || !view.chart) return
     if (view.chanDivId) {
+      viewByIndicatorId.delete(view.chanDivId)
       view.chart.removeIndicator({ id: view.chanDivId })
       view.chanDivId = null
     }
@@ -1045,6 +1145,7 @@
 
   function toggleIndicator(key, on) {
     state.indOptions[key] = on
+    saveState()
     const view = mainView
     if (!view || !view.chart) return
     if (on) {
@@ -1068,6 +1169,9 @@
   function initCharts() {
     resetChanCalc()
     if (mainView && mainView.chart) klinecharts.dispose(mainView.chart)
+    // 旧图表的指标 id → 旧 view 条目（含旧 analyzer 状态，最多 5000 根K线）必须清掉，
+    // 否则旧视图被 Map 引用住无法回收；fallbackView 不注册指标 id，clear 安全
+    viewByIndicatorId.clear()
     mainView = createChartView({ containerId: 'chart', isMain: true })
     window.__chart = mainView.chart
     refreshTabInfo()
@@ -1113,6 +1217,7 @@
 
   function toggleChanOption(key, on) {
     state.chanOptions[key] = on
+    saveState()
     if (mainView) {
       mainView.chanOptions[key] = on
       if (mainView.chart) {
@@ -1124,6 +1229,7 @@
   function bindUI() {
     $('#exchange').addEventListener('change', (e) => {
       state.exchange = e.target.value
+      saveState()
       initCharts()
     })
 
@@ -1132,6 +1238,7 @@
       if (!v) return
       state.symbol = v.toUpperCase()
       $('#symbol').value = state.symbol
+      saveState()
       refreshChart()
       setActiveState()
     })
@@ -1144,6 +1251,7 @@
       if (!btn) return
       state.symbol = btn.dataset.symbol
       $('#symbol').value = state.symbol
+      saveState()
       refreshChart()
       setActiveState()
     })
@@ -1155,6 +1263,7 @@
       const period = PERIODS.find((p) => p.label === label)
       if (!period) return
       state.period = { type: period.type, span: period.span }
+      saveState()
       refreshChart()
       setActiveState()
     })
@@ -1172,6 +1281,7 @@
     $('#tg-boll').addEventListener('change', (e) => toggleIndicator('boll', e.target.checked))
     $('#tg-china').addEventListener('change', (e) => {
       state.indOptions.chinaColors = e.target.checked
+      saveState()
       if (mainView && mainView.chart) mainView.chart.setStyles(darkStyles())
     })
   }
@@ -1180,6 +1290,17 @@
   // 入口
   // ---------------------------------------------------------------------------
   function init() {
+    // 外部唯一 CDN 依赖缺失时给出可见提示（否则静默白屏）
+    if (typeof klinecharts === 'undefined') {
+      const el = $('#chart')
+      if (el) {
+        const msg = document.createElement('div')
+        msg.className = 'cdn-error'
+        msg.textContent = '图表库加载失败：无法从 cdn.jsdelivr.net 获取 klinecharts。请检查网络或代理后刷新页面。'
+        el.appendChild(msg)
+      }
+      return
+    }
     klinecharts.registerIndicator({
       name: 'CHAN',
       shortName: '缠论',
@@ -1204,6 +1325,8 @@
       draw: drawChanDiv
     })
 
+    loadPersistedState()
+    syncControlsFromState()
     bindUI()
     initCharts()
     setActiveState()

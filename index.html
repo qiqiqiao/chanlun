@@ -65,7 +65,11 @@
     <footer id="status" class="statusbar"></footer>
   </main>
 
-  <script src="https://cdn.jsdelivr.net/npm/klinecharts@10.0.2/dist/umd/klinecharts.min.js"></script>
+  <!-- 图表库（外部唯一 CDN 依赖）：SRI 校验防篡改；加载失败时 main.js 会在 #chart 内提示 -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/klinecharts@10.0.2/dist/umd/klinecharts.min.js"
+    integrity="sha512-x6kHWKlTlcUysd6cfqXgApj6whL125hFoR7nXOEGwvtJFK85XJ82UITpbq2CLyFdncXr3dtvjbGUECdvPWG63Q=="
+    crossorigin="anonymous"></script>
   <!-- 缠论算法模块（依赖顺序：config → merge → fractal → stroke → segment → center → divergence → analyzer → 装配） -->
   <script src="src/config.js"></script>
   <script src="src/merge.js"></script>
