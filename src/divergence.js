@@ -51,6 +51,48 @@
     return hists
   }
 
+  // 单步 MACD 递推：prev 为处理完第 i-1 根收盘价后的状态（{emaFast, emaSlow, dea}，
+  // null 表示尚未开始），返回 { cur, hist }。与 macdHistogram 逐字段一致。
+  function macdStep(prev, c, kf, ks, kg) {
+    if (prev === null) {
+      return { cur: { emaFast: c, emaSlow: c, dea: 0 }, hist: 0 }
+    }
+    const emaFast = prev.emaFast + (c - prev.emaFast) * kf
+    const emaSlow = prev.emaSlow + (c - prev.emaSlow) * ks
+    const dif = emaFast - emaSlow
+    const dea = prev.dea + (dif - prev.dea) * kg
+    return { cur: { emaFast, emaSlow, dea }, hist: 2 * (dif - dea) }
+  }
+
+  // 一次遍历计算 MACD 柱序列，并返回末两根的递推状态供后续增量续算。
+  // 返回 { hists, cur, prev }：cur = 第 n-1 根后的状态，prev = 第 n-2 根后的状态（不存在则为 null）。
+  function macdHistogramState(closes, fast, slow, signal) {
+    const n = closes.length
+    const hists = new Array(n)
+    if (n === 0) return { hists, cur: null, prev: null }
+    const kf = 2 / (fast + 1)
+    const ks = 2 / (slow + 1)
+    const kg = 2 / (signal + 1)
+    let cur = null
+    let prev = null
+    for (let i = 0; i < n; i++) {
+      const c = closes[i]
+      if (i === 0) {
+        cur = { emaFast: c, emaSlow: c, dea: 0 }
+        hists[i] = 0
+      } else {
+        prev = cur
+        const emaFast = cur.emaFast + (c - cur.emaFast) * kf
+        const emaSlow = cur.emaSlow + (c - cur.emaSlow) * ks
+        const dif = emaFast - emaSlow
+        const dea = cur.dea + (dif - cur.dea) * kg
+        cur = { emaFast, emaSlow, dea }
+        hists[i] = 2 * (dif - dea)
+      }
+    }
+    return { hists, cur, prev }
+  }
+
   // 区间 [fromRaw, toRaw] 内同方向 MACD 柱面积（dir: 'up' 取正柱和，'down' 取负柱绝对值和）
   function rangeMomentum(hists, fromRaw, toRaw, dir) {
     let sum = 0
@@ -83,29 +125,68 @@
     return { from: f.rawStart, to: t.rawEnd }
   }
 
+  // 带缓存的窗口动量：windowIntensity 结果只依赖 [fromRaw, toRaw] 内 hists 之和与
+  // 窗口长度（与 dir 无关，Math.abs(sum) === Math.abs(-sum)）。hists 只在尾部变化
+  // （dirtyFrom = 最近一次变化的最左下标），故 toRaw < dirtyFrom 的窗口可复用上次
+  // 结果，避免每 tick 重扫整段窗口。cache = { map: Map<fromRaw, Map<toRaw, number>>, dirtyFrom }。
+  function cachedWindowIntensity(hists, fromRaw, toRaw, dir, cache) {
+    if (cache && toRaw < cache.dirtyFrom) {
+      const inner = cache.map.get(fromRaw)
+      if (inner !== undefined) {
+        const hit = inner.get(toRaw)
+        if (hit !== undefined) return hit
+      }
+    }
+    const v = windowIntensity(hists, fromRaw, toRaw, dir)
+    if (cache) {
+      let inner = cache.map.get(fromRaw)
+      if (inner === undefined) {
+        inner = new Map()
+        cache.map.set(fromRaw, inner)
+      }
+      inner.set(toRaw, v)
+    }
+    return v
+  }
+
   // 笔动量强度：笔端点分型的 mi 窗口映射到原始下标
-  function strokeMomentum(hists, merged, s) {
+  function strokeMomentum(hists, merged, s, cache) {
     if (!s.from || !s.to) return 0
     const w = rawWindow(merged, s.from.mi, s.to.mi)
-    return w ? windowIntensity(hists, w.from, w.to, s.dir) : 0
+    return w ? cachedWindowIntensity(hists, w.from, w.to, s.dir, cache) : 0
   }
 
   // 线段动量强度（大级别走势动量）：同上线段端点 mi 窗口
-  function segmentMomentum(hists, merged, seg) {
+  function segmentMomentum(hists, merged, seg, cache) {
     if (!seg.from || !seg.to) return 0
     const w = rawWindow(merged, seg.from.mi, seg.to.mi)
-    return w ? windowIntensity(hists, w.from, w.to, seg.dir) : 0
+    return w ? cachedWindowIntensity(hists, w.from, w.to, seg.dir, cache) : 0
   }
 
-  // 笔所在的大级别线段：覆盖该笔的线段，否则取起点在其之前的最后一条
+  // 笔所在的大级别线段：覆盖该笔的线段，否则取起点在其之前的最后一条。
+  // 线段按 fromRaw 严格递增且首尾相接（toRaw[k] === fromRaw[k+1]），因此可用
+  // 二分定位：k = 最后一个 fromRaw <= s.fromRaw 的下标；t = 第一个 toRaw >=
+  // s.toRaw 的下标；t <= k 表示线段 t 完整覆盖该笔，否则返回 k（起笔前的最后一条）。
   function enclosingSegment(segments, s) {
-    let hit = -1
-    for (let k = 0; k < segments.length; k++) {
-      const seg = segments[k]
-      if (seg.fromRaw <= s.fromRaw && s.toRaw <= seg.toRaw) return k
-      if (seg.fromRaw <= s.fromRaw) hit = k
+    const n = segments.length
+    let lo = 0
+    let hi = n
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (segments[mid].fromRaw <= s.fromRaw) lo = mid + 1
+      else hi = mid
     }
-    return hit
+    const k = lo - 1
+    if (k < 0) return -1
+    lo = 0
+    hi = n
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (segments[mid].toRaw < s.toRaw) lo = mid + 1
+      else hi = mid
+    }
+    const t = lo
+    return t <= k ? t : k
   }
 
   // 大级别动量对比：所在线段 vs 其前一条已完结的同向线段（segMom 为预计算动量）
@@ -134,18 +215,18 @@
   }
 
   // 预计算每个笔的动量强度（原始K线窗口扫描总共 O(n)，避免逐笔重复扫描）
-  function precomputeStrokeMoms(hists, merged, strokes) {
+  function precomputeStrokeMoms(hists, merged, strokes, cache) {
     const n = strokes.length
     const out = new Array(n)
-    for (let i = 0; i < n; i++) out[i] = strokeMomentum(hists, merged, strokes[i])
+    for (let i = 0; i < n; i++) out[i] = strokeMomentum(hists, merged, strokes[i], cache)
     return out
   }
 
   // 预计算每个线段的动量强度（总 O(n)，避免大级别对比时重复扫描）
-  function precomputeSegmentMoms(hists, merged, segments) {
+  function precomputeSegmentMoms(hists, merged, segments, cache) {
     const n = segments.length
     const out = new Array(n)
-    for (let k = 0; k < n; k++) out[k] = segmentMomentum(hists, merged, segments[k])
+    for (let k = 0; k < n; k++) out[k] = segmentMomentum(hists, merged, segments[k], cache)
     return out
   }
 
@@ -199,11 +280,15 @@
    *   动量强度比 = 强度(j)/强度(i) < minMomentumDrop → 局部背驰成立。
    *   大级别确认：aligned 且 fading===true → confirmed（强背驰）。
    */
-  function calcDivergences(strokes, segments, strokeCenters, merged, closes, cfg) {
+  function calcDivergences(strokes, segments, strokeCenters, merged, closes, cfg, preHists, momCache) {
     const dcfg = cfg.divergence
-    const hists = macdHistogram(closes, dcfg.macdFast, dcfg.macdSlow, dcfg.macdSignal)
-    const strokeMom = precomputeStrokeMoms(hists, merged, strokes)
-    const segMom = precomputeSegmentMoms(hists, merged, segments)
+    // 允许外部传入已增量维护好的 MACD 柱序列（analyzer 增量链路），
+    // 未传时按纯函数口径全量计算，保证两条路径逐字段一致。
+    const hists = preHists !== undefined
+      ? preHists
+      : macdHistogram(closes, dcfg.macdFast, dcfg.macdSlow, dcfg.macdSignal)
+    const strokeMom = precomputeStrokeMoms(hists, merged, strokes, momCache)
+    const segMom = precomputeSegmentMoms(hists, merged, segments, momCache)
     const centerIdx = dcfg.requireCenter
       ? buildCenterIndex(strokeCenters, strokes.length)
       : null
@@ -251,7 +336,7 @@
     return out
   }
 
-  const api = { macdHistogram, rangeMomentum, calcDivergences }
+  const api = { macdHistogram, macdStep, macdHistogramState, rangeMomentum, calcDivergences }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api
   } else {

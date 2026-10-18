@@ -26,12 +26,21 @@
     const { createStrokeMachine } = core.stroke
     const { calcSegmentsFull } = core.segment
     const { calcCenters } = core.center
-    const { calcDivergences } = core.divergence
+    const { calcDivergences, macdHistogramState, macdStep } = core.divergence
 
     function createAnalyzer(config) {
       const cfg = normalizeConfig(config)
       let raw = [] // 完整原始K线（updateLast 回退重放需要）
       let closes = [] // 与 raw 对齐的收盘价缓存（背驰 MACD 用，避免每次重算时 map 分配）
+      let hists = [] // 与 closes 对齐的 MACD 柱序列（增量维护，避免每 tick 全量重算）
+      let macdCur = null // 处理完末根收盘价后的 EMA 递推状态（{emaFast, emaSlow, dea}）
+      let macdPrev = null // 处理完倒数第二根后的状态（updateLast 回算末根用）
+      let macdKf = 0
+      let macdKs = 0
+      let macdKg = 0
+      // 笔/线段动量缓存：keyed by (fromRaw, toRaw)，dirtyFrom = 最近一次 hists 变化的
+      // 最左侧下标（hists 只在尾部变化），toRaw < dirtyFrom 的窗口可复用上次结果。
+      const momCache = { map: new Map(), dirtyFrom: Infinity }
       let merged = []
       let dirs = []
       let fxAll = [] // 过滤后的分型流（喂给笔状态机）
@@ -65,6 +74,11 @@
       function reset() {
         raw = []
         closes = []
+        hists = []
+        macdCur = null
+        macdPrev = null
+        momCache.map.clear()
+        momCache.dirtyFrom = Infinity
         merged = []
         dirs = []
         fxAll = []
@@ -91,6 +105,16 @@
         }
         raw = newRaw
         closes = newCloses
+        const dcfg = cfg.divergence
+        macdKf = 2 / (dcfg.macdFast + 1)
+        macdKs = 2 / (dcfg.macdSlow + 1)
+        macdKg = 2 / (dcfg.macdSignal + 1)
+        const mst = macdHistogramState(newCloses, dcfg.macdFast, dcfg.macdSlow, dcfg.macdSignal)
+        hists = mst.hists
+        macdCur = mst.cur
+        macdPrev = mst.prev
+        momCache.map.clear()
+        momCache.dirtyFrom = 0
         const m = mergeBars(raw)
         merged = m.merged
         dirs = m.dirs
@@ -124,6 +148,7 @@
         a.dir === b.dir && a.fromRaw === b.fromRaw && a.toRaw === b.toRaw && a.finished === b.finished
 
       // 笔背驰依赖笔+线段+笔中枢+原始收盘价，随上游全量重算（纯函数 O(n)）
+      // hists 已增量维护好，动量缓存复用未变化窗口，避免每 tick 重算整段。
       function recalcDivergences() {
         divergences = calcDivergences(
           strokes(),
@@ -131,8 +156,12 @@
           strokeCenters,
           merged,
           closes,
-          cfg
+          cfg,
+          hists,
+          momCache
         )
+        // 动量缓存已同步到当前 hists，重置脏区间
+        momCache.dirtyFrom = Infinity
       }
 
       // 分型重判 → 交替过滤重建 → 笔重放 → 线段/中枢重扫（增量核心）
@@ -169,11 +198,18 @@
         }
         const r = resumeMerge(merged, dirs, newBars, dataLen)
         dataLen += newBars.length
+        const oldLen = closes.length
         // 逐根追加（spread push 在大批量追加时可能触发参数上限）
         for (let i = 0; i < newBars.length; i++) {
           raw.push(newBars[i])
           closes.push(newBars[i].close)
+          const mc = macdStep(macdCur, newBars[i].close, macdKf, macdKs, macdKg)
+          macdPrev = macdCur
+          macdCur = mc.cur
+          hists.push(mc.hist)
         }
+        // 新 K 线只在 oldLen 起追加，hists 脏区间从 oldLen 开始
+        momCache.dirtyFrom = Math.min(momCache.dirtyFrom, oldLen)
         let fromMi
         if (r.pushedCount > 0) {
           fromMi = r.lastUpdated ? r.baseLen - 2 : r.baseLen - 1
@@ -256,7 +292,14 @@
         const snapHigh = snapLast ? snapLast.high : 0
         const snapLow = snapLast ? snapLast.low : 0
         raw[n - 1] = newLastBar
-        if (closes.length === n) closes[n - 1] = newLastBar.close
+        if (closes.length === n) {
+          closes[n - 1] = newLastBar.close
+          // 末根收盘价变化只影响最后一根 MACD 柱：用倒数第二根的状态回算（O(1)）
+          const mc = macdStep(macdPrev, newLastBar.close, macdKf, macdKs, macdKg)
+          macdCur = mc.cur
+          hists[n - 1] = mc.hist
+          momCache.dirtyFrom = Math.min(momCache.dirtyFrom, n - 1)
+        }
         if (!unmergeLastRaw()) {
           fullInit(raw)
           return computeResult()
