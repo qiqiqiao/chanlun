@@ -248,13 +248,31 @@
           fullInit([newLastBar])
           return computeResult()
         }
+        // 快照 unmerge 前的尾元素，用于短路：末根在包含关系内跳动（merged 尾元素
+        // 高/低/长度不变）时，分型→笔→线段→中枢整条链都不变，无需尾部重算。
+        const oldClose = closes.length === n ? closes[n - 1] : null
+        const snapLen = merged.length
+        const snapLast = merged[snapLen - 1]
+        const snapHigh = snapLast ? snapLast.high : 0
+        const snapLow = snapLast ? snapLast.low : 0
         raw[n - 1] = newLastBar
         if (closes.length === n) closes[n - 1] = newLastBar.close
-        if (unmergeLastRaw()) {
-          resumeMerge(merged, dirs, [newLastBar], n - 1)
-          recomputeTail(merged.length - 2)
-        } else {
+        if (!unmergeLastRaw()) {
           fullInit(raw)
+          return computeResult()
+        }
+        resumeMerge(merged, dirs, [newLastBar], n - 1)
+        const last = merged[merged.length - 1]
+        const mergedUnchanged =
+          merged.length === snapLen &&
+          !!last &&
+          last.high === snapHigh &&
+          last.low === snapLow
+        if (!mergedUnchanged) {
+          recomputeTail(merged.length - 2)
+        } else if (oldClose !== newLastBar.close) {
+          // merged 未变但原始收盘价变了：只有背驰 MACD 依赖收盘价，单独重算
+          recalcDivergences()
         }
         return computeResult()
       }
