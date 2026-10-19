@@ -152,11 +152,8 @@
     divergenceBottomWeak: 'rgba(63, 214, 127, 0.55)'
   }
 
-  // 每个图表视图独立的运行状态（主图 / 测试兜底视图）
-  //  klinecharts 的自定义指标回调能拿到 indicator.id，用它反查所属视图。
-  const viewByIndicatorId = new Map()
+  // 单图表视图的运行状态（多周期联动已移除，不再需要视图反查表/兜底视图）
   let mainView = null
-  let fallbackView = null
   let faviconSymbol = null
 
   // ---------------------------------------------------------------------------
@@ -236,8 +233,8 @@
   }
 
   // WebSocket 自动重连由 data-layer.js 提供（指数退避 + 抖动；close 后不再重连）
-  const createReconnectingSocket = (url, onMessage, onOpen) =>
-    window.dataLayer.createReconnectingSocket(url, { onMessage, onOpen })
+  const createReconnectingSocket = (url, onMessage, onOpen, onReconnect) =>
+    window.dataLayer.createReconnectingSocket(url, { onMessage, onOpen, onReconnect })
 
   const exchangers = {
     binance: {
@@ -270,22 +267,27 @@
         if (!Array.isArray(arr)) throw new ExchangeError('Binance 响应格式异常', { retryable: true })
         return arr.map((k) => ({ timestamp: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }))
       },
-      subscribe(symbol, period, cb) {
+      subscribe(symbol, period, cb, opts) {
         const stream = this.normalize(symbol).toLowerCase() + '@kline_' + this.periodStr(period.type, period.span)
-        return createReconnectingSocket('wss://stream.binance.com:9443/ws/' + stream, (m) => {
-          const k = m && m.k
-          if (k) {
-            cb({
-              timestamp: k.t,
-              open: +k.o,
-              high: +k.h,
-              low: +k.l,
-              close: +k.c,
-              volume: +k.v,
-              isBarClosed: !!k.x
-            })
-          }
-        })
+        return createReconnectingSocket(
+          'wss://stream.binance.com:9443/ws/' + stream,
+          (m) => {
+            const k = m && m.k
+            if (k) {
+              cb({
+                timestamp: k.t,
+                open: +k.o,
+                high: +k.h,
+                low: +k.l,
+                close: +k.c,
+                volume: +k.v,
+                isBarClosed: !!k.x
+              })
+            }
+          },
+          undefined,
+          opts && opts.onReconnect
+        )
       }
     },
     okx: {
@@ -331,7 +333,7 @@
         const arr = (json.data || []).slice().reverse()
         return arr.map((k) => ({ timestamp: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }))
       },
-      subscribe(symbol, period, cb) {
+      subscribe(symbol, period, cb, opts) {
         const instId = this.normalize(symbol)
         return createReconnectingSocket(
           'wss://ws.okx.com:8443/ws/v5/public',
@@ -347,7 +349,8 @@
                 low: +c[3],
                 close: +c[4],
                 volume: +c[5],
-                isBarClosed: false
+                // OKX candles 第 9 项 confirm：'1' = 已收盘，'0' = 进行中
+                isBarClosed: String(c[8]) === '1'
               })
             }
           },
@@ -358,7 +361,8 @@
                 args: [{ channel: this.periodWss(period.type, period.span), instId }]
               })
             )
-          }
+          },
+          opts && opts.onReconnect
         )
       }
     }
@@ -369,41 +373,51 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 缠论计算与绘制（多视图）
+  // 缠论计算与绘制
   // ---------------------------------------------------------------------------
+  // 算法默认参数单一来源（src/config.js）：避免 MACD 12/26/9 在多处硬编码。
+  const ALGO_DEFAULTS = window.chanlun.DEFAULT_CONFIG
+  const MACD_PARAMS = [
+    ALGO_DEFAULTS.divergence.macdFast,
+    ALGO_DEFAULTS.divergence.macdSlow,
+    ALGO_DEFAULTS.divergence.macdSignal
+  ]
+  const CHAN_CONFIG = { bi: { minGap: ALGO_DEFAULTS.bi.minGap } }
+
   // 实时更新策略在 realtime.js：用【内容签名】判断末根变化（对象原地改值也能识别），
   // 而不是对象引用。klinecharts 可能复用同一 bar 对象并原地修改 OHLC，
   // 引用判断会漏判 → 缠论不刷新（P0 已修复）。
   function createUpdater() {
     return window.realtime.createRealtimeUpdater({
       createAnalyzer: (cfg) => window.chanlun.createAnalyzer(cfg),
-      config: { biMinGap: 4 }
+      config: CHAN_CONFIG
     })
   }
 
-  // klinecharts 的自定义指标回调（calc/draw）拿到 indicator；用它反查所属视图。
-  // 测试环境无真实图表（indicator 无 id）时回退到主视图，主视图不存在则用兜底视图。
-  function resolveView(indicator) {
-    if (indicator && indicator.id && viewByIndicatorId.has(indicator.id)) {
-      return viewByIndicatorId.get(indicator.id)
-    }
-    return mainView || ensureFallbackView()
-  }
-
-  function ensureFallbackView() {
-    if (!fallbackView) {
-      fallbackView = {
-        isMain: true,
+  // 惰性视图：浏览器 initCharts 会创建带图表的视图；测试环境不初始化
+  // klinecharts 时，runChanCalc 仍需要一份状态容器。
+  function ensureView() {
+    if (!mainView) {
+      mainView = {
         symbol: state.symbol,
         exchange: state.exchange,
         period: state.period,
         chanState: null,
         // 与模块默认开关共享引用：测试直接改 state.chanOptions 即生效
         chanOptions: state.chanOptions,
-        updater: createUpdater()
+        updater: createUpdater(),
+        chart: null,
+        volId: null,
+        macdId: null,
+        bollId: null,
+        chanDivId: null
       }
     }
-    return fallbackView
+    return mainView
+  }
+
+  function resolveView() {
+    return ensureView()
   }
 
   // CHAN calc 的返回值不被消费（figures 为空）：单项共享 + 按视图/长度缓存数组，
@@ -422,20 +436,19 @@
     const view = resolveView(indicator)
     const n = dataList.length
     if (!n) {
-      if (view.isMain) updateStatus()
+      updateStatus()
       return zeroResultFor(view, n)
     }
     const r = view.updater.update(dataList)
     view.chanState = r.state
-    if (view.isMain) updateStatus()
+    updateStatus()
     return zeroResultFor(view, n)
   }
 
   function updateStatus() {
     const el = $('#status')
     if (!el) return
-    const view = mainView || fallbackView
-    const chanState = view ? view.chanState : null
+    const chanState = mainView ? mainView.chanState : null
     if (!chanState) {
       el.textContent = ''
       return
@@ -1045,7 +1058,6 @@
 
   function resetChanCalc() {
     resetView(mainView)
-    if (fallbackView) resetView(fallbackView)
     updateStatus()
   }
 
@@ -1061,21 +1073,20 @@
       },
       onLoadingChange: setLoading,
       onData: () => {
-        if (view && view.isMain) refreshTabInfo()
+        refreshTabInfo()
       }
     })
   }
 
-  // 创建单个图表视图：独立的 klinecharts 实例 + 缠论状态 + 显示开关 + 加载器
-  function createChartView({ containerId, isMain }) {
+  // 创建图表视图：klinecharts 实例 + 缠论状态 + 显示开关 + 加载器
+  function createChartView({ containerId }) {
     const view = {
-      isMain,
       symbol: state.symbol,
       exchange: state.exchange,
       period: state.period,
       chanState: null,
       chanOptions: { ...state.chanOptions },
-      indOptions: { volume: isMain, macd: isMain, boll: isMain },
+      indOptions: { volume: true, macd: true, boll: true },
       chart: null,
       updater: createUpdater(),
       volId: null,
@@ -1085,8 +1096,7 @@
     }
     view.chart = klinecharts.init(containerId)
     view.chart.setStyles(darkStyles())
-    const chanId = view.chart.createIndicator({ name: 'CHAN', paneId: 'candle_pane' }, true)
-    if (chanId) viewByIndicatorId.set(chanId, view)
+    view.chart.createIndicator({ name: 'CHAN', paneId: 'candle_pane' }, true)
     applyIndicators(view)
     view.chart.setSymbol({ ticker: state.symbol })
     view.chart.setPeriod(view.period)
@@ -1095,10 +1105,10 @@
   }
 
   function createMacd(view) {
-    view = view || mainView || ensureFallbackView()
+    view = view || ensureView()
     const ch = view.chart
     if (!ch) return
-    view.macdId = ch.createIndicator({ name: 'MACD', calcParams: [12, 26, 9] })
+    view.macdId = ch.createIndicator({ name: 'MACD', calcParams: MACD_PARAMS.slice() })
     // 把「背驰面积」指标附加到 MACD 所在的 pane（失败则静默降级，不影响主图）
     try {
       const mi = ch.getIndicators({ id: view.macdId })
@@ -1108,7 +1118,6 @@
       if (paneId) {
         const divId = ch.createIndicator({ name: 'CHAN_DIV', paneId }, true)
         view.chanDivId = divId
-        if (divId) viewByIndicatorId.set(divId, view)
       }
     } catch (e) {
       view.chanDivId = null
@@ -1118,7 +1127,6 @@
   function removeMacd(view) {
     if (!view || !view.chart) return
     if (view.chanDivId) {
-      viewByIndicatorId.delete(view.chanDivId)
       view.chart.removeIndicator({ id: view.chanDivId })
       view.chanDivId = null
     }
@@ -1165,15 +1173,10 @@
     }
   }
 
-  // 副图周期同步：联动开启时跟随主图的更高一级周期
   function initCharts() {
     resetChanCalc()
     if (mainView && mainView.chart) klinecharts.dispose(mainView.chart)
-    // 旧图表的指标 id → 旧 view 条目（含旧 analyzer 状态，最多 5000 根K线）必须清掉，
-    // 否则旧视图被 Map 引用住无法回收；fallbackView 不注册指标 id，clear 安全
-    viewByIndicatorId.clear()
-    mainView = createChartView({ containerId: 'chart', isMain: true })
-    window.__chart = mainView.chart
+    mainView = createChartView({ containerId: 'chart' })
     refreshTabInfo()
   }
 
@@ -1319,7 +1322,7 @@
       figures: [],
       calc: (dataList) => {
         const closes = dataList.map((d) => d.close)
-        const hist = window.chanlun.macdHistogram(closes, 12, 26, 9)
+        const hist = window.chanlun.macdHistogram(closes, MACD_PARAMS[0], MACD_PARAMS[1], MACD_PARAMS[2])
         return hist.map((h) => ({ value: h }))
       },
       draw: drawChanDiv
@@ -1364,17 +1367,11 @@
       resetView,
       initCharts,
       toggleIndicator,
-      __setChartForTest(ch) {
-        // 注入 mock 图表（browser-smoke 回归测试）：挂到兜底视图上
-        ensureFallbackView()
-        fallbackView.chart = ch
-        fallbackView.isMain = true
-      },
       get mainView() {
         return mainView
       },
       get chanState() {
-        return mainView ? mainView.chanState : fallbackView ? fallbackView.chanState : null
+        return mainView ? mainView.chanState : null
       }
     }
   }

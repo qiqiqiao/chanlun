@@ -4,7 +4,7 @@
  * 覆盖 update/updateLast 的边界语义：
  *   - 空批次 no-op；追加批大小无关（一次大包 == 逐根小包）
  *   - updateLast 定型与 update 追加交替（回退重放与增量混合）
- *   - reset 后复用；参数化（minGap / fractal mode / center minElements）
+ *   - reset 后复用；参数化（minGap / center minElements）
  *   - 输入不变量：analyzer 不修改调用方传入的 K 线数组
  */
 'use strict'
@@ -71,8 +71,8 @@ t('reset 后可重新初始化', () => {
 t('多种参数下增量与全量一致', () => {
   const bars = barsFrom([100, 103, 101, 106, 104, 109, 107, 112, 110, 115, 113, 118, 116, 121, 119, 124, 122, 127, 125, 130, 128, 133, 131, 136, 134, 139, 137, 142, 140, 145])
   const variants = [
-    { biMinGap: 2, fractal: { mode: 'relaxed' }, center: { minElements: 4 } },
-    { biMinGap: 6, fractal: { mode: 'strict' }, center: { minElements: 3 } },
+    { biMinGap: 2, center: { minElements: 4 } },
+    { biMinGap: 6, center: { minElements: 3 } },
     { biMinGap: 3 }
   ]
   for (const cfg of variants) {

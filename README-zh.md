@@ -8,7 +8,7 @@
 index.html     脚本按依赖顺序加载（无构建步骤）
 │
 ├─ src/                缠论算法核心（独立模块，UMD 风格，浏览器/Node 双端可用）
-│  ├─ config.js        配置：全部规则参数化（bi.minGap / fractal.mode / center.minElements…）
+│  ├─ config.js        配置：全部规则参数化（bi.minGap / center.minElements / divergence…）
 │  ├─ merge.js         包含关系处理（mergeBars 全量 / resumeMerge 增量续接）
 │  ├─ fractal.js       分型识别（calcFractals 全量 / resumeFractals 尾部重判 / 全局交替过滤）
 │  ├─ stroke.js        笔（可回放状态机 createStrokeMachine）
@@ -20,6 +20,9 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 ├─ data-layer.js       可靠数据层：K线缓存、指数退避重试、WS 自动重连、图表加载器
 ├─ realtime.js         实时行情更新策略（内容签名判末根变化，P0 修复）
 ├─ main.js             图表集成（klinecharts v10 + 交易所适配 + 缠论绘制）
+├─ package.json        仅测试脚本（无运行时依赖）
+├─ LICENSE             MIT
+├─ .github/workflows/  CI
 └─ tests/              零依赖测试（node tests/run.js）
    ├─ merge / fractal / stroke / segment / center / divergence / analyzer .test.js   各层单元 + 增量一致性
    ├─ segment-edge.test.js   线段判定边界（第二种情况/否定/确认/锚点恢复）+ 回归
@@ -42,14 +45,17 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 1. **局部（笔级别）**：向前找最近一根「可超越」的同向笔（遇到未创新高/新低的
    同向笔即停止回溯），两笔之间需存在笔中枢（中枢起于两笔之间，或单一延伸
    大中枢覆盖两笔——盘整背驰）。后笔创出极值但**动量强度**弱于前笔
-   （强度比 < `divergence.minMomentumDrop`）→ 笔背驰。
+   （强度比 < `divergence.minMomentumDrop`）→ 笔背驰。动量为 0 的同向笔
+   （如早期反转笔尚无同向 MACD 柱）不参与比较，继续向前找有实际同向动量的
+   同向笔，仍受「未创新高/新低即停止」约束。
 2. **大级别（线段级别）确认**：后笔所在线段 vs 其前一条已完结同向线段比较动量：
    - 大级别动量同步衰减 + 线段方向与笔同向 → **强背驰**（confirmed）；
    - 大级别动量仍在扩张或无比价 → **弱背驰**（更可能是中枢震荡/回调）。
 
-动量度量 = **单位K线 MACD 柱净面积**：`hist = 2*(DIF-DEA)`（12/26/9），
-区间 Σhist 按移动方向定向后取绝对值再除以窗口K线数——归一化时长使不同长度
-的两笔/两线段可公度，取绝对值兼容 0 轴上下穿越。
+动量度量 = **单位K线同向 MACD 柱面积**：`hist = 2*(DIF-DEA)`（12/26/9），
+区间只累计与移动方向同向的柱（上行取正柱、下行取负柱绝对值）再除以窗口K线数。
+与 `rangeMomentum` 同口径；逆势柱不计入，避免方向定向的净面积为负时被误判为
+强动量。归一化时长使不同长度的两笔/两线段可公度。
 
 事件字段：
 
@@ -82,7 +88,7 @@ barSignature(bar) = timestamp|open|high|low|close|volume|isBarClosed
 ## 运行测试
 
 ```bash
-node tests/run.js            # 全部测试（125 项，不含真实网络）
+node tests/run.js            # 全部测试（130+ 项，不含真实网络）
 LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js   # 真实 Binance/OKX 链路压测
 node tests/run.js tests/segment-edge.test.js   # 单文件
 ```
@@ -167,8 +173,7 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
 
 ```js
 chanlun.analyze(bars, {
-  biMinGap: 4,                    // 笔内合并K线最小间隔（兼容旧参数）
-  fractal: { mode: 'strict' },    // strict | relaxed
+  bi: { minGap: 4 },              // 笔内合并K线最小间隔
   segment: { method: 'feature-sequence' },
   center: { minElements: 3 },
   divergence: {
@@ -180,3 +185,18 @@ chanlun.analyze(bars, {
   }
 })
 ```
+
+## 行为变更（近期）
+
+- **背驰动量口径**：改为只累计同向 MACD 柱面积（与 `rangeMomentum` 统一），
+  不再对方向定向的净面积取绝对值。逆势动量不再被当成强动量，信号数量会减少；
+  同时动量为 0 的同向笔会被跳过，继续向前找有实际同向动量的同向笔。
+- **移除 `fractal.mode`**：包含合并后相邻K线互不包含，`strict` 与 `relaxed`
+  等价，故只保留原 `strict` 口径。
+- **重连回补**：WebSocket 重连后会通过 REST 补拉断线期间的K线；回补期间再次
+  断线时，陈旧回补会作废，由最新连接自行回补/订阅。
+- **OKX `isBarClosed`**：改用 candles 频道的 `confirm` 字段，不再恒为 `false`。
+- **数据层修正**：init 复用缓存时重新包含末根（刷新其终值），并在离线较久时
+  循环补齐或（缺口过大时）重载，避免末根陈旧/时间断层。
+- **实时更新器**：追加路径会先处理同批被修改的旧末根，保证与全量 `analyze`
+  逐字段一致。

@@ -15,13 +15,13 @@
     </div>
     <div class="controls">
       <div class="row">
-        <select id="exchange" title="数据源">
+        <select id="exchange" title="数据源" aria-label="数据源">
           <option value="binance">Binance</option>
           <option value="okx">OKX</option>
         </select>
-        <input id="symbol" type="text" value="BTCUSDT" spellcheck="false" autocomplete="off" placeholder="如 BTCUSDT">
+        <input id="symbol" type="text" value="BTCUSDT" spellcheck="false" autocomplete="off" placeholder="如 BTCUSDT" aria-label="交易对">
         <button id="go" class="btn primary">分析</button>
-        <div id="quick-symbols" class="chips">
+        <div id="quick-symbols" class="chips" role="group" aria-label="快捷交易对">
           <button class="chip" data-symbol="BTCUSDT">BTCUSDT</button>
           <button class="chip" data-symbol="ETHUSDT">ETHUSDT</button>
           <button class="chip" data-symbol="SOLUSDT">SOLUSDT</button>
@@ -30,7 +30,7 @@
         </div>
       </div>
       <div class="row">
-        <div id="periods" class="chips">
+        <div id="periods" class="chips" role="group" aria-label="K线周期">
           <button class="chip" data-period="1m">1m</button>
           <button class="chip" data-period="5m">5m</button>
           <button class="chip" data-period="15m">15m</button>
@@ -40,7 +40,7 @@
           <button class="chip" data-period="1d">1d</button>
           <button class="chip" data-period="1w">1w</button>
         </div>
-        <div class="toggles">
+        <div class="toggles" role="group" aria-label="图层与指标开关">
           <label><input type="checkbox" id="tg-fractal" checked> 分型</label>
           <label><input type="checkbox" id="tg-stroke" checked> 笔</label>
           <label><input type="checkbox" id="tg-segment" checked> 线段</label>
@@ -59,10 +59,12 @@
   </header>
 
   <main>
-    <div id="chart"></div>
-    <div id="loading" class="overlay hidden"><div class="spinner"></div><span>数据加载中…</span></div>
-    <div id="toast" class="toast hidden"></div>
-    <footer id="status" class="statusbar"></footer>
+    <div id="chart" role="img" aria-label="K线图表"></div>
+    <div id="loading" class="overlay hidden" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div><span>数据加载中…</span>
+    </div>
+    <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
+    <footer id="status" class="statusbar" role="status" aria-live="polite"></footer>
   </main>
 
   <!-- 图表库（外部唯一 CDN 依赖）：SRI 校验防篡改；加载失败时 main.js 会在 #chart 内提示 -->

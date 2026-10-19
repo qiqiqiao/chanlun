@@ -62,6 +62,15 @@ t('rangeMomentum 同向面积口径', () => {
   near(c.rangeMomentum(h, 0, 4, 'down'), 6, 1e-9, 'down = 负柱绝对值和')
 })
 
+t('windowIntensity 与 rangeMomentum 同口径：逆势柱不计入（不再被 abs 当成强动量）', () => {
+  const h = [1, -2, 3, -4, 5]
+  near(c.windowIntensity(h, 0, 4, 'up'), 9 / 5, 1e-9, 'up = 正柱和/长度')
+  near(c.windowIntensity(h, 0, 4, 'down'), 6 / 5, 1e-9, 'down = 负柱绝对值和/长度')
+  // 净面积为负的窗口：上行没有同向动量 → 0（旧 abs 会得到正强度 2）
+  near(c.windowIntensity([-1, -2, -3], 0, 2, 'up'), 0, 1e-9, '逆势窗 up 强度为 0')
+  near(c.windowIntensity([-1, -2, -3], 0, 2, 'down'), 2, 1e-9, '顺势窗 down 强度 > 0')
+})
+
 // ---------------------------------------------------------------------------
 // 合成结构（绕开流水线，直接控制笔/线段/中枢）
 // ---------------------------------------------------------------------------
@@ -208,7 +217,11 @@ t('有机顶背驰：弱势创新高触发事件并带大级别上下文', () =>
   const d = r.divergences.find((x) => x.kind === 'top' && x.si === lastSi)
   assert(d, '最后一笔存在顶背驰: ' + JSON.stringify(r.divergences))
   assert(d.provisional === true, '尾笔 provisional 标记')
-  assert(d.prevSi === lastSi - 2, '与最近同向笔比较')
+  // 同向面积口径下，更近的早期反转笔可能无同向动量（被跳过），故比较对象是
+  // 更早、但有实际同向动量的同向笔。
+  assert(d.prevSi < lastSi, '与更早的同向笔比较')
+  assert(r.strokes[d.prevSi].dir === r.strokes[lastSi].dir, '比较对象同向')
+  assert(d.momentum.previous > 0, '比较笔有同向动量')
   assert(d.momentum.ratio < 0.9 && d.momentum.previous > 0, '动量数值合理')
   assert(typeof d.bigLevel.segmentSi === 'number', '大级别字段存在')
   assert(['weak', 'strong'].includes(d.strength), 'strength 枚举')

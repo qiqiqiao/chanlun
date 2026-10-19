@@ -1,5 +1,5 @@
 /*!
- * tests/fractal.test.js —— 分型识别（strict / relaxed 两种口径）
+ * tests/fractal.test.js —— 分型识别
  */
 'use strict'
 const { makeRng } = require('./helpers')
@@ -38,19 +38,16 @@ t('底分型（strict）：高低双低', () => {
   assert(fx[0].type === 'bottom' && fx[0].mi === 1, 'bottom at 1')
 })
 
-t('strict 下高双高但低未双低 → 不是顶', () => {
+t('高双高但低未双低 → 不是顶', () => {
   // 只用 high/low 直接构造 merged 元素（避开 mergeBars 的包含合并）
   const merged = [
     { high: 10, low: 6, rawMiddle: 0 },
     { high: 13, low: 8, rawMiddle: 1 },   // 候选；检查 low：8>6 ✓ 但 n.low=9
     { high: 11, low: 9, rawMiddle: 2 }
   ]
-  // strict：m.low(8) < n.low(9) → 不满足 顶 的“low 双高” → 不是顶
-  const fx = c.calcFractals(merged, c.normalizeConfig())
-  deepEqual(fx.length, 0, 'strict should reject')
-  // relaxed 只看 high：13>10 且 13>11 → 顶
-  const fxR = c.calcFractals(merged, { fractal: { mode: 'relaxed' } })
-  deepEqual(fxR.length, 1, 'relaxed accepts')
+  // m.low(8) < n.low(9) → 不满足 顶 的“low 双高” → 不是顶
+  const fx = c.calcFractals(merged)
+  deepEqual(fx.length, 0, 'reject')
 })
 
 t('顶底交替过滤：相邻同类型只保留更极端', () => {
@@ -88,19 +85,6 @@ t('相邻同类型分型：后者更极端时替换前者', () => {
   deepEqual(fx.length, 2)
   assert(fx[0].type === 'top' && fx[0].mi === 2, 'only higher adjacent top survives')
   assert(fx[1].type === 'bottom' && fx[1].mi === 3)
-})
-
-t('strict 与 relaxed 结果不同/相同可复现', () => {
-  const rng = makeRng(5)
-  const merged = []
-  for (let i = 0; i < 200; i++) {
-    const h = 100 + rng() * 10
-    merged.push({ high: h, low: h - rng() * 5, rawMiddle: i, mi: i })
-  }
-  const s = c.calcFractals(merged, { fractal: { mode: 'strict' } })
-  const r = c.calcFractals(merged, { fractal: { mode: 'relaxed' } })
-  // relaxed 条件更宽，结果分型数不少于 strict
-  assert(r.length >= s.length, 'relaxed >= strict')
 })
 
 t('分型：createAnalyzer 增量与全量一致', () => {

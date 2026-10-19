@@ -10,20 +10,13 @@
 (function (global) {
   'use strict'
 
-  function fractalAt(merged, i, cfg) {
+  // 顶分型要求高点更高且低点也更高，底分型反之。
+  // 注：包含合并后相邻K线互不包含，故“只比较对应端”的宽松口径与这里完全等价，
+  // 不再提供 fractal.mode 选项（旧口径已移除）。
+  function fractalAt(merged, i) {
     const m = merged[i]
     const p = merged[i - 1]
     const n = merged[i + 1]
-    if (cfg.fractal.mode === 'relaxed') {
-      if (m.high > p.high && m.high > n.high) {
-        return { type: 'top', mi: i, high: m.high, low: m.low, rawMiddle: m.rawMiddle }
-      }
-      if (m.low < p.low && m.low < n.low) {
-        return { type: 'bottom', mi: i, high: m.high, low: m.low, rawMiddle: m.rawMiddle }
-      }
-      return null
-    }
-    // strict（默认）：顶分型要求高点更高且低点也更高，底分型反之
     if (m.high > p.high && m.high > n.high && m.low > p.low && m.low > n.low) {
       return { type: 'top', mi: i, high: m.high, low: m.low, rawMiddle: m.rawMiddle }
     }
@@ -52,10 +45,10 @@
   }
 
   // 分型顶底交替过滤：相邻同类型分型只保留更极端的那个（全量路径）
-  function calcFractals(merged, cfg) {
+  function calcFractals(merged) {
     const fxAll = []
     for (let i = 1; i < merged.length - 1; i++) {
-      const f = fractalAt(merged, i, cfg)
+      const f = fractalAt(merged, i)
       if (f) fxAll.push(f)
     }
     const result = []
@@ -78,7 +71,7 @@
   // 直接截断追加即可，无需 Map 重建 + 全量排序（旧实现每次增量 O(n log n)）。
   // 注意：有效分型的 mi ≤ merged.length - 2 = end，mi > end 的都是 merged 收缩
   // （updateLast 回退末元素）留下的过期残留，随截断一并清除。
-  function resumeFractals(fxAll, merged, fromMi, cfg) {
+  function resumeFractals(fxAll, merged, fromMi) {
     const start = Math.min(Math.max(1, fromMi), Math.max(1, merged.length - 3))
     const end = merged.length - 2
     if (end < start) return
@@ -91,7 +84,7 @@
     }
     const fresh = []
     for (let i = start; i <= end; i++) {
-      const f = fractalAt(merged, i, cfg)
+      const f = fractalAt(merged, i)
       if (f) fresh.push(f)
     }
     fxAll.length = lo

@@ -108,6 +108,7 @@
     opts = opts || {}
     const onMessage = handlers.onMessage || (() => {})
     const onOpen = handlers.onOpen || null
+    const onReconnect = handlers.onReconnect || null
     const connectImpl = opts.connect || ((u) => new WebSocket(u))
     const schedule = opts.schedule || ((delay, fn) => setTimeout(fn, delay))
     const clear = opts.clear || ((timer) => clearTimeout(timer))
@@ -119,26 +120,70 @@
     let closed = false
     let retries = 0
     let timer = null
+    let hasOpened = false // 区分首次连接与重连（重连需要补拉断线期间的K线）
+    let paused = false // 回补期间缓冲实时消息，避免较新的消息把回补的旧K线挡掉
+    let pending = []
+
+    // onOpen 里通常会发订阅消息（OKX）。socket 可能仍在 CONNECTING（例如回补期间
+    // 又断线重连），send 会抛 InvalidStateError；订阅失败由后续重连自愈，这里吞掉。
+    function safeOpen(socket) {
+      if (!onOpen) return
+      try {
+        onOpen(socket)
+      } catch (e) {
+        /* 订阅失败：交给下一次重连重新订阅 */
+      }
+    }
+
+    // 回补完成后：先重新订阅（OKX 需要在 onOpen 里发 subscribe；Binance 隐含在 URL），
+    // 再按序放行缓冲消息。
+    // 若回补期间又发生了新的连接（socket !== ws），本次 resume 作废——让新连接
+    // 自己走回补/订阅，避免对陈旧或尚未 OPEN 的 socket 发消息。
+    function resume(socket) {
+      if (closed || socket !== ws) return
+      safeOpen(socket)
+      const msgs = pending
+      pending = []
+      paused = false
+      for (let i = 0; i < msgs.length; i++) onMessage(msgs[i])
+    }
 
     function connect() {
       if (closed) return
-      ws = connectImpl(url)
-      ws.onopen = () => {
+      const sock = connectImpl(url)
+      ws = sock
+      sock.onopen = () => {
         retries = 0
-        if (onOpen) onOpen(ws)
+        if (!hasOpened) {
+          hasOpened = true
+          safeOpen(sock)
+          return
+        }
+        // 重连：暂停消息 → REST 回补 → 恢复并重新订阅
+        paused = true
+        pending = []
+        if (!onReconnect) {
+          resume(sock)
+          return
+        }
+        Promise.resolve()
+          .then(() => onReconnect(sock))
+          .then(() => resume(sock), () => resume(sock))
       }
-      ws.onerror = () => { /* 统一交给 onclose 处理重连 */ }
-      ws.onmessage = (ev) => {
+      sock.onerror = () => { /* 统一交给 onclose 处理重连 */ }
+      sock.onmessage = (ev) => {
+        if (sock !== ws) return // 已被新连接取代，丢弃旧 socket 的消息
         let m
         try {
           m = JSON.parse(ev.data)
         } catch (e) {
           return
         }
+        if (paused) { pending.push(m); return }
         onMessage(m)
       }
-      ws.onclose = () => {
-        if (closed) return
+      sock.onclose = () => {
+        if (closed || sock !== ws) return
         let delay = Math.min(baseDelay * 2 ** retries, maxDelay)
         if (jitter) delay *= 0.8 + Math.random() * 0.4
         retries++
@@ -151,6 +196,8 @@
     return {
       close() {
         closed = true
+        paused = false
+        pending = []
         if (timer) clear(timer)
         if (ws) {
           try { ws.close() } catch (e) { /* noop */ }
@@ -163,6 +210,10 @@
     }
   }
 
+  // 缓存补齐的最大轮次（每轮最多拉取 limit 根）。缓存单键本身有上限，
+  // 超过此轮次仍未追平（异常交易所/超长缺口）则丢弃缓存重载最新。
+  const MAX_CATCHUP_ROUNDS = 100
+
   // klinecharts v10 setDataLoader 适配
   // deps: { getExchange, cache, onError, onLoadingChange, onData }
   function createKlineLoader(deps) {
@@ -174,9 +225,34 @@
 
     let loadSeq = 0
     let activeWs = null
+    let subSeq = 0 // 订阅代际：切换品种/周期后使进行中的回补失效
+    let lastBarTs = null // 图表已知的末根时间戳（订阅回调 + 初始化缓存）
 
     function cacheKey(ex, ticker, period) {
       return ex.label + ':' + ticker + ':' + ex.periodStr(period.type, period.span)
+    }
+
+    function noteBarTs(ts) {
+      if (typeof ts === 'number' && (lastBarTs === null || ts > lastBarTs)) lastBarTs = ts
+    }
+
+    // 重连回补：从最新K线往回翻页，收集 >= sinceTs 的K线，返回升序数组。
+    // 不依赖交易所“向前分页”的方向语义（OKX 的 before 返回最新一段而非紧邻一段），
+    // 而是统一用“最新一页 + before 向前翻”直到覆盖 sinceTs，两家都适用。
+    async function fetchSince(ex, ticker, period, sinceTs, beforeOf) {
+      const byTs = new Map()
+      let chunk = await ex.fetchKlines(ticker, period, { limit: 1000 })
+      for (let round = 0; chunk.length && round < MAX_CATCHUP_ROUNDS; round++) {
+        const oldest = chunk[0].timestamp
+        for (let i = 0; i < chunk.length; i++) {
+          if (chunk[i].timestamp >= sinceTs) byTs.set(chunk[i].timestamp, chunk[i])
+        }
+        if (oldest <= sinceTs) break
+        const older = await ex.fetchKlines(ticker, period, { limit: 1000, before: beforeOf(oldest) })
+        if (!older.length || older[0].timestamp >= oldest) break // 无进展
+        chunk = older
+      }
+      return [...byTs.values()].sort((a, b) => a.timestamp - b.timestamp)
     }
 
     return {
@@ -200,10 +276,33 @@
           if (type === 'init') {
             const cached = cache.get(key)
             if (cached && cached.length) {
-              // 复用缓存：左边界保持在上次起点，只补齐更晚出现的K线
-              const lastTs = cached[cached.length - 1].timestamp
-              const newer = await ex.fetchKlines(ticker, period, { limit: 1000, after: afterOf(lastTs) })
-              if (newer.length) cache.merge(key, newer)
+              // 复用缓存：左边界保持在上次起点，循环补齐更晚的K线直到追平。
+              // 用 afterOf(lastTs - 1) 重新包含末根：首次缓存时末根可能尚未收盘，
+              // 只拉 lastTs 之后会永久漏掉它的终值；merge 按时间戳覆盖旧值。
+              let lastTs = cached[cached.length - 1].timestamp
+              let caughtUp = false
+              for (let round = 0; round < MAX_CATCHUP_ROUNDS; round++) {
+                if (seq !== loadSeq) { caughtUp = true; break } // 已被更新的请求取代，停止补拉
+                const newer = await ex.fetchKlines(ticker, period, { limit: 1000, after: afterOf(lastTs - 1) })
+                if (!newer.length) { caughtUp = true; break }
+                // 返回的首根仍晚于 lastTs：交易所一次给的是“最新一段”而非紧邻缓存的
+                // 一段（中间有缺口），丢弃缓存重载最新，避免图表出现时间断层。
+                if (newer[0].timestamp > lastTs) {
+                  const fresh = await ex.fetchKlines(ticker, period, { limit: 1000 })
+                  cache.set(key, fresh)
+                  caughtUp = true
+                  break
+                }
+                cache.merge(key, newer)
+                const newLastTs = newer[newer.length - 1].timestamp
+                if (newLastTs <= lastTs) { caughtUp = true; break } // 无进展（已追平）
+                lastTs = newLastTs
+              }
+              if (!caughtUp) {
+                // 轮次耗尽仍未追平（异常/超长缺口）：丢弃缓存重载最新
+                const fresh = await ex.fetchKlines(ticker, period, { limit: 1000 })
+                cache.set(key, fresh)
+              }
               data = cache.get(key)
             } else {
               const fresh = await ex.fetchKlines(ticker, period, { limit: 1000 })
@@ -243,13 +342,40 @@
           try { activeWs.close() } catch (e) { /* noop */ }
           activeWs = null
         }
+        const key = cacheKey(ex, ticker, period)
+        const gen = ++subSeq
+        const beforeOf = ex.beforeParam || ((ts) => ts)
+        // 以缓存末根作为重连回补锚点（init 后缓存与图表末尾一致）
+        const cached = cache.get(key)
+        lastBarTs = cached && cached.length ? cached[cached.length - 1].timestamp : null
+
+        // WS 重连后补拉断线期间的K线：逐根喂给图表回调（klinecharts update 语义为
+        // timestamp > 末根则追加、== 末根则替换），含末根以刷新其终值。
+        const onReconnect = async () => {
+          if (gen !== subSeq) return
+          const since = lastBarTs
+          if (since === null) return
+          const bars = await fetchSince(ex, ticker, period, since, beforeOf)
+          if (gen !== subSeq) return
+          if (!bars.length) return
+          cache.merge(key, bars)
+          for (let i = 0; i < bars.length; i++) {
+            callback(bars[i])
+            noteBarTs(bars[i].timestamp)
+          }
+          onData()
+        }
+
         activeWs = ex.subscribe(ticker, period, (bar) => {
           callback(bar)
+          noteBarTs(bar && bar.timestamp)
           onData()
-        })
+        }, { onReconnect })
       },
 
       unsubscribeBar: () => {
+        subSeq++ // 使进行中的回补失效
+        lastBarTs = null
         if (activeWs) {
           try { activeWs.close() } catch (e) { /* noop */ }
           activeWs = null

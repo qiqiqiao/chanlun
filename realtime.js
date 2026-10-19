@@ -89,6 +89,12 @@
       // 尾部追加新K线 → 增量
       if (n > lastDataLen) {
         try {
+          // 同一批里旧末根可能被定型/修改（例如上一根收盘 + 新根出现合并到一次计算）。
+          // 追加前先按末根更新处理，否则 analyzer 只看到新增部分，旧末根终值被忽略。
+          const prevLast = lastDataLen > 0 ? dataList[lastDataLen - 1] : null
+          if (prevLast && (prevLast.timestamp !== lastLastTs || barSignature(prevLast) !== lastLastSignature)) {
+            analyzer.updateLast(prevLast)
+          }
           analyzer.update(dataList.slice(lastDataLen))
           chanState = analyzer.state
         } catch (e) {

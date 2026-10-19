@@ -152,8 +152,8 @@ t('createMacd：CHAN_DIV 必须以 isStack=true 附加，不得删掉 MACD（kli
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), sb, { filename: 'main.js' })
 
   assert(sb.__chanlunChart, '测试钩子已暴露')
-  sb.__chanlunChart.__setChartForTest(mockChart)
-  sb.__chanlunChart.createMacd()
+  // 直接注入 mock 图表（不再需要生产代码里的 __setChartForTest）
+  sb.__chanlunChart.createMacd({ chart: mockChart })
 
   const macd = mockChart.getIndicators({ name: 'MACD' })
   const div = mockChart.getIndicators({ name: 'CHAN_DIV' })

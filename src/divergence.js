@@ -3,15 +3,15 @@
  *
  * 背驰判据（《教你炒股票》第 15/24/29 课口径的结构化实现）：
  *   1. 局部（笔级别）：同向两笔围绕笔中枢，后笔创出新高/新低，
- *      但动量强度（单位K线 MACD 柱净面积）弱于前笔 → 笔背驰；
+ *      但动量强度（单位K线同向 MACD 柱面积）弱于前笔 → 笔背驰；
  *   2. 大级别（线段级别）确认：后笔所在线段与其前一同向线段比较动量——
  *      大级别动量同步衰减 → 强背驰（confirmed，反转预警权重高）；
  *      大级别动量仍在扩张 → 弱背驰（更可能是中枢震荡/回调）。
  *
  * 动量度量：MACD 柱面积的【单位K线强度】。EMA(12/26) → DIF，DEA=DIF 的 EMA(9)，
- * hist = 2*(DIF-DEA)；区间净面积 = Σhist 按移动方向定向后取绝对值，
- * 再除以窗口K线数。除以时长是为了两笔/两线段窗口可公度（经典“斜率变缓”
- * 口径），取绝对值使 0 轴上下穿越后的同向移动仍可比。
+ * hist = 2*(DIF-DEA)；区间面积只累计与移动方向同向的柱（上行取正柱、下行取
+ * 负柱绝对值），再除以窗口K线数。与 rangeMomentum 同口径；逆势柱不计入，
+ * 避免方向定向的净面积为负时被误判为强动量。除以时长使两笔/两线段窗口可公度。
  * 强度比 = 当前强度 / 前同向笔强度，< minMomentumDrop 判背驰。
  *
  * 坐标系：MACD 在【原始K线收盘价】上计算；笔/线段的合并K线窗口
@@ -23,36 +23,8 @@
 (function (global) {
   'use strict'
 
-  // MACD 柱序列：hist[i] = 2*(DIF[i] - DEA[i])，与输入收盘价等长
-  function macdHistogram(closes, fast, slow, signal) {
-    const n = closes.length
-    const hists = new Array(n)
-    if (n === 0) return hists
-    const kf = 2 / (fast + 1)
-    const ks = 2 / (slow + 1)
-    const kg = 2 / (signal + 1)
-    let emaFast = closes[0]
-    let emaSlow = closes[0]
-    let dea = 0
-    for (let i = 0; i < n; i++) {
-        const c = closes[i]
-        if (i > 0) {
-            emaFast += (c - emaFast) * kf
-            emaSlow += (c - emaSlow) * ks
-        }
-        const dif = emaFast - emaSlow
-        if (i === 0) {
-            dea = dif
-        } else {
-            dea += (dif - dea) * kg
-        }
-        hists[i] = 2 * (dif - dea)
-    }
-    return hists
-  }
-
-  // 单步 MACD 递推：prev 为处理完第 i-1 根收盘价后的状态（{emaFast, emaSlow, dea}，
-  // null 表示尚未开始），返回 { cur, hist }。与 macdHistogram 逐字段一致。
+  // 单步 MACD 递推（唯一实现）：prev 为处理完第 i-1 根收盘价后的状态
+  // （{emaFast, emaSlow, dea}，null 表示尚未开始），返回 { cur, hist }。
   function macdStep(prev, c, kf, ks, kg) {
     if (prev === null) {
       return { cur: { emaFast: c, emaSlow: c, dea: 0 }, hist: 0 }
@@ -65,7 +37,8 @@
   }
 
   // 一次遍历计算 MACD 柱序列，并返回末两根的递推状态供后续增量续算。
-  // 返回 { hists, cur, prev }：cur = 第 n-1 根后的状态，prev = 第 n-2 根后的状态（不存在则为 null）。
+  // 返回 { hists, cur, prev }：cur = 第 n-1 根后的状态，prev = 第 n-2 根后的状态
+  // （不存在则为 null）。全量/单步/增量三条路径共用 macdStep，避免三份递推。
   function macdHistogramState(closes, fast, slow, signal) {
     const n = closes.length
     const hists = new Array(n)
@@ -76,21 +49,17 @@
     let cur = null
     let prev = null
     for (let i = 0; i < n; i++) {
-      const c = closes[i]
-      if (i === 0) {
-        cur = { emaFast: c, emaSlow: c, dea: 0 }
-        hists[i] = 0
-      } else {
-        prev = cur
-        const emaFast = cur.emaFast + (c - cur.emaFast) * kf
-        const emaSlow = cur.emaSlow + (c - cur.emaSlow) * ks
-        const dif = emaFast - emaSlow
-        const dea = cur.dea + (dif - cur.dea) * kg
-        cur = { emaFast, emaSlow, dea }
-        hists[i] = 2 * (dif - dea)
-      }
+      prev = cur
+      const step = macdStep(cur, closes[i], kf, ks, kg)
+      cur = step.cur
+      hists[i] = step.hist
     }
     return { hists, cur, prev }
+  }
+
+  // MACD 柱序列：hist[i] = 2*(DIF[i] - DEA[i])，与输入收盘价等长
+  function macdHistogram(closes, fast, slow, signal) {
+    return macdHistogramState(closes, fast, slow, signal).hists
   }
 
   // 区间 [fromRaw, toRaw] 内同方向 MACD 柱面积（dir: 'up' 取正柱和，'down' 取负柱绝对值和）
@@ -105,16 +74,15 @@
     return sum
   }
 
-  // 动量强度：按移动方向定向的 MACD 柱净面积绝对值 / 窗口K线数。
-  //   定向：上行取 +Σhist、下行取 -Σhist（下跌趋势中的反弹笔同样可测）；
-  //   归一化时长使不同长度的两笔/两线段可公度；取绝对值兼容 0 轴穿越。
+  // 动量强度：沿移动方向的 MACD 柱面积 / 窗口K线数。
+  //   只累计同向柱（上行取正柱、下行取负柱的绝对值），与 rangeMomentum 同口径；
+  //   逆势柱不计入（相当于逐柱“负值截 0”），避免方向定向的净面积为负时被当成
+  //   强动量。归一化时长使不同长度的两笔/两线段可公度。
   function windowIntensity(hists, fromRaw, toRaw, dir) {
     const a = Math.max(0, fromRaw)
     const b = Math.min(hists.length - 1, toRaw)
     if (b < a) return 0
-    let sum = 0
-    for (let i = a; i <= b; i++) sum += hists[i]
-    return Math.abs(dir === 'up' ? sum : -sum) / (b - a + 1)
+    return rangeMomentum(hists, a, b, dir) / (b - a + 1)
   }
 
   // 合并K线索引窗口 → 原始K线下标窗口
@@ -125,15 +93,16 @@
     return { from: f.rawStart, to: t.rawEnd }
   }
 
-  // 带缓存的窗口动量：windowIntensity 结果只依赖 [fromRaw, toRaw] 内 hists 之和与
-  // 窗口长度（与 dir 无关，Math.abs(sum) === Math.abs(-sum)）。hists 只在尾部变化
-  // （dirtyFrom = 最近一次变化的最左下标），故 toRaw < dirtyFrom 的窗口可复用上次
-  // 结果，避免每 tick 重扫整段窗口。cache = { map: Map<fromRaw, Map<toRaw, number>>, dirtyFrom }。
+  // 带缓存的窗口动量：windowIntensity 依赖 [fromRaw, toRaw] 内同向柱面积、窗口长度
+  // 与方向。hists 只在尾部变化（dirtyFrom = 最近一次变化的最左下标），故
+  // toRaw < dirtyFrom 的窗口可复用上次结果，避免每 tick 重扫整段窗口。
+  // cache = { map: Map<fromRaw, Map<toRaw*2+dirBit, number>>, dirtyFrom }。
   function cachedWindowIntensity(hists, fromRaw, toRaw, dir, cache) {
+    const key = toRaw * 2 + (dir === 'down' ? 1 : 0)
     if (cache && toRaw < cache.dirtyFrom) {
       const inner = cache.map.get(fromRaw)
       if (inner !== undefined) {
-        const hit = inner.get(toRaw)
+        const hit = inner.get(key)
         if (hit !== undefined) return hit
       }
     }
@@ -144,7 +113,7 @@
         inner = new Map()
         cache.map.set(fromRaw, inner)
       }
-      inner.set(toRaw, v)
+      inner.set(key, v)
     }
     return v
   }
@@ -277,6 +246,8 @@
    *     - requireCenter 时两笔之间存在笔中枢：中枢起于两笔之间
    *       （c.startIndex ∈ (i, j)，允许延伸越过 j —— “离开段尝试”的实时判定），
    *       或中枢整体覆盖两笔区间（单一延伸大中枢内的盘整背驰）。
+   *     - 动量强度为 0 的同向笔（如早期反转笔尚无同向柱）不参与比较，继续向前
+   *       找有实际同向动量的同向笔；仍受“极值未被超越即终止”约束。
    *   动量强度比 = 强度(j)/强度(i) < minMomentumDrop → 局部背驰成立。
    *   大级别确认：aligned 且 fading===true → confirmed（强背驰）。
    */
@@ -302,6 +273,9 @@
         const beyond = up ? s.toValue > p.toValue : s.toValue < p.toValue
         if (!beyond) break
         if (dcfg.requireCenter && !hasCenterBetween(centerIdx, i, j)) continue
+        // 同向面积口径下，早期反转笔可能没有任何同向柱（动量为 0）。这种笔
+        // 没有“力度”可比，继续向前找有实际同向动量的同向笔。
+        if (strokeMom[i] <= 0) continue
         prev = i
         break
       }
@@ -309,7 +283,6 @@
       const p = strokes[prev]
       const momCur = strokeMom[j]
       const momPrev = strokeMom[prev]
-      if (momPrev <= 0) continue
       const ratio = momCur / momPrev
       if (ratio >= dcfg.minMomentumDrop) continue
       const bigLevel = bigLevelContext(
@@ -336,7 +309,7 @@
     return out
   }
 
-  const api = { macdHistogram, macdStep, macdHistogramState, rangeMomentum, calcDivergences }
+  const api = { macdHistogram, macdStep, macdHistogramState, rangeMomentum, windowIntensity, calcDivergences }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api
   } else {

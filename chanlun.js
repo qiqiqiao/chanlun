@@ -29,14 +29,14 @@
     const { calcStrokes, createStrokeMachine } = core.stroke
     const { segmentScan, calcSegments, calcSegmentsFull } = core.segment
     const { centerScan, calcCenters } = core.center
-    const { calcDivergences, macdHistogram, rangeMomentum } = core.divergence
+    const { calcDivergences, macdHistogram, rangeMomentum, windowIntensity } = core.divergence
     const { createAnalyzer } = core.analyzer
 
     // 全量入口：输出格式与旧版保持一致
     function analyze(klineDataList, config) {
       const cfg = normalizeConfig(config)
       const { merged } = mergeBars(klineDataList)
-      const fxAll = calcFractals(merged, cfg)
+      const fxAll = calcFractals(merged)
       const machine = createStrokeMachine(cfg.bi.minGap)
       machine.replay(fxAll, 0)
       const strokes = machine.state.strokes
@@ -83,7 +83,8 @@
       calcCenters,
       calcDivergences,
       macdHistogram,
-      rangeMomentum
+      rangeMomentum,
+      windowIntensity
     }
   }
 

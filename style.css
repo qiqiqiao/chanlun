@@ -259,3 +259,58 @@ main {
   line-height: 1.6;
   text-align: center;
 }
+/* ---------- 响应式 ---------- */
+@media (max-width: 720px) {
+  .topbar {
+    padding: 8px 10px;
+    gap: 10px;
+  }
+  .brand h1 {
+    font-size: 16px;
+  }
+  .brand .subtitle {
+    display: none;
+  }
+  .controls {
+    flex-basis: 100%;
+  }
+  .toggles {
+    margin-left: 0;
+    gap: 8px;
+  }
+  input[type="text"] {
+    width: 110px;
+  }
+  .statusbar {
+    font-size: 10px;
+  }
+  .toast {
+    max-width: 92%;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar {
+    gap: 6px;
+  }
+  .chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .toggles {
+    gap: 6px;
+  }
+  .toggles label {
+    font-size: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+  .chip {
+    transition: none;
+  }
+}

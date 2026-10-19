@@ -94,6 +94,23 @@ t('更新策略：init / append / skip / noop / 收缩重建', () => {
   assert.strictEqual(r.action, 'init')
 })
 
+t('追加同批里旧末根被修改 → 不能忽略（追加路径自洽）', () => {
+  const bars = barsFrom([100, 102, 101, 104, 103])
+  const updater = makeUpdater()
+  updater.update(bars.slice(0, 3)) // 初始 3 根，旧末根索引 2
+  // 同一批：旧末根(索引 2)被定型修改 + 追加两根
+  const next = bars.slice()
+  next[2] = { ...next[2], close: next[2].close + 20, high: next[2].high + 20 }
+  const r = updater.update(next)
+  assert.strictEqual(r.action, 'append')
+  const ref = c.analyze(next, CONFIG)
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(r.state)),
+    JSON.parse(JSON.stringify(ref)),
+    '旧末根修改必须参与重算，结果与全量 analyze 一致'
+  )
+})
+
 t('末根时间戳变化（即使内容相同）→ replaceLast', () => {
   const bars = barsFrom([100, 102, 101, 104, 103, 106])
   const updater = makeUpdater()

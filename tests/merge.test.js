@@ -152,10 +152,8 @@ t('resumeMerge 与 mergeBars 一致', () => {
 t('normalizeConfig 默认与兼容', () => {
   const d = c.normalizeConfig()
   deepEqual(d.bi.minGap, 4)
-  deepEqual(d.fractal.mode, 'strict')
   const compat = c.normalizeConfig({ biMinGap: 7 })
   deepEqual(compat.bi.minGap, 7)
-  const nested = c.normalizeConfig({ bi: { minGap: 3 }, fractal: { mode: 'relaxed' } })
+  const nested = c.normalizeConfig({ bi: { minGap: 3 } })
   deepEqual(nested.bi.minGap, 3)
-  deepEqual(nested.fractal.mode, 'relaxed')
 })

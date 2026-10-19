@@ -25,8 +25,8 @@ t('随机数据的全量 + 逐根 update 增量一致性', () => {
 t('多种参数下逐根 update 一致性', () => {
   const bars = randomWalk(200, 7)
   const variants = [
-    { biMinGap: 2, fractal: { mode: 'relaxed' } },
-    { biMinGap: 6, fractal: { mode: 'strict' } },
+    { biMinGap: 2 },
+    { biMinGap: 6 },
     { biMinGap: 3 }
   ]
   for (const cfg of variants) {

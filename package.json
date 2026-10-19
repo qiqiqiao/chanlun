@@ -1,0 +1,14 @@
+{
+  "name": "chanlun-chart",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chan Theory (缠论) analysis pipeline with a real-time crypto chart (KLineChart v10).",
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/run.js",
+    "test:live": "LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

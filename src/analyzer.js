@@ -38,21 +38,18 @@
       let macdKf = 0
       let macdKs = 0
       let macdKg = 0
-      // 笔/线段动量缓存：keyed by (fromRaw, toRaw)，dirtyFrom = 最近一次 hists 变化的
-      // 最左侧下标（hists 只在尾部变化），toRaw < dirtyFrom 的窗口可复用上次结果。
+      // 笔/线段动量缓存：keyed by (fromRaw, toRaw, dir)，dirtyFrom = 最近一次 hists
+      // 变化的最左侧下标（hists 只在尾部变化），toRaw < dirtyFrom 的窗口可复用上次结果。
       const momCache = { map: new Map(), dirtyFrom: Infinity }
       let merged = []
       let dirs = []
       let fxAll = [] // 过滤后的分型流（喂给笔状态机）
       let machine = null
-      let anchors = [] // 线段确认锚点：已确认线段的终点笔索引（递增）
       let segments = []
       let strokeCenters = []
       let segmentCenters = []
       let divergences = []
       let dataLen = 0
-      let centerStrokeLastStart = -1 // 最后一个笔中枢的 startIndex（-1 = 无）
-      let centerSegmentLastStart = -1
       let prevFilteredFxs = [] // 上轮重建后的过滤分型流（计算公共前缀）
       const fxFracEq = (a, b) => a.mi === b.mi && a.type === b.type
 
@@ -83,14 +80,11 @@
         dirs = []
         fxAll = []
         machine = null
-        anchors = []
         segments = []
         strokeCenters = []
         segmentCenters = []
         divergences = []
         dataLen = 0
-        centerStrokeLastStart = -1
-        centerSegmentLastStart = -1
         prevFilteredFxs = []
       }
 
@@ -119,18 +113,15 @@
         merged = m.merged
         dirs = m.dirs
         fxAll = []
-        resumeFractals(fxAll, merged, 1, cfg) // 原始分型流（不含交替过滤）
+        resumeFractals(fxAll, merged, 1) // 原始分型流（不含交替过滤）
         const initFiltered = rebuildFilteredFractals(fxAll)
         prevFilteredFxs = initFiltered
         machine = createStrokeMachine(cfg.bi.minGap)
         machine.replay(initFiltered, 0)
         const r = calcSegmentsFull(strokes(), cfg)
         segments = r.segments
-        anchors = r.confirmedSis
         strokeCenters = calcCenters(strokes(), cfg)
         segmentCenters = calcCenters(segments, cfg)
-        centerStrokeLastStart = strokeCenters.length ? strokeCenters[strokeCenters.length - 1].startIndex : -1
-        centerSegmentLastStart = segmentCenters.length ? segmentCenters[segmentCenters.length - 1].startIndex : -1
         recalcDivergences()
         dataLen = bars.length
       }
@@ -143,9 +134,6 @@
         }
         return m
       }
-
-      const segEq = (a, b) =>
-        a.dir === b.dir && a.fromRaw === b.fromRaw && a.toRaw === b.toRaw && a.finished === b.finished
 
       // 笔背驰依赖笔+线段+笔中枢+原始收盘价，随上游全量重算（纯函数 O(n)）
       // hists 已增量维护好，动量缓存复用未变化窗口，避免每 tick 重算整段。
@@ -170,7 +158,7 @@
       // 而线段/中枢数量少，全量重扫开销可接受，且彻底避免锚漂移。
       function recomputeTail(fromMi) {
         // fxAll 维护的是原始分型流；交替过滤整体重建，保证与全量口径一致
-        resumeFractals(fxAll, merged, fromMi, cfg)
+        resumeFractals(fxAll, merged, fromMi)
         const filteredFxs = rebuildFilteredFractals(fxAll)
         // 笔状态机公共前缀重放：仅从分型流仍一致处恢复，规避交替过滤前缀变化
         const prefixLen = prevFilteredFxs.length
@@ -180,12 +168,9 @@
         const anchor = Math.min(prefixLen, machine.snapCount() - 1, filteredFxs.length - 1)
         machine.replay(filteredFxs, anchor)
         const fullSeg = calcSegmentsFull(strokes(), cfg)
-        anchors = fullSeg.confirmedSis
         segments = fullSeg.segments
         strokeCenters = calcCenters(strokes(), cfg)
         segmentCenters = calcCenters(segments, cfg)
-        centerStrokeLastStart = strokeCenters.length ? strokeCenters[strokeCenters.length - 1].startIndex : -1
-        centerSegmentLastStart = segmentCenters.length ? segmentCenters[segmentCenters.length - 1].startIndex : -1
         recalcDivergences()
       }
 
@@ -321,7 +306,6 @@
       }
 
       return {
-        __probe: () => ({ fxAll: fxAll.slice(), filtered: prevFilteredFxs.slice() }),
         update,
         updateLast,
         reset,
