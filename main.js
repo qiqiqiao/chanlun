@@ -14,8 +14,6 @@
       fractal: true,
       stroke: true,
       segment: true,
-      featureSeq: true,
-      mergedFeatureSeq: true,
       segmentCenter: true,
       strokeCenter: false,
       divergence: true
@@ -23,7 +21,6 @@
     indOptions: {
       volume: true,
       macd: true,
-      boll: true,
       chinaColors: false
     }
   }
@@ -57,14 +54,11 @@
     ['chanOptions', 'fractal', 'tg-fractal'],
     ['chanOptions', 'stroke', 'tg-stroke'],
     ['chanOptions', 'segment', 'tg-segment'],
-    ['chanOptions', 'featureSeq', 'tg-featureseq'],
-    ['chanOptions', 'mergedFeatureSeq', 'tg-mgfeatureseq'],
     ['chanOptions', 'segmentCenter', 'tg-segcenter'],
     ['chanOptions', 'strokeCenter', 'tg-strcenter'],
     ['chanOptions', 'divergence', 'tg-divergence'],
     ['indOptions', 'volume', 'tg-volume'],
     ['indOptions', 'macd', 'tg-macd'],
-    ['indOptions', 'boll', 'tg-boll'],
     ['indOptions', 'chinaColors', 'tg-china']
   ]
 
@@ -409,7 +403,6 @@
         chart: null,
         volId: null,
         macdId: null,
-        bollId: null,
         chanDivId: null
       }
     }
@@ -543,35 +536,6 @@
     return incoming ? incoming.dir : 'up'
   }
 
-  // 被包含合并的特征笔：raw features 中，除各合并根最左一根外，
-  // 其余被并入合并根的原始特征笔（即被包含处理“吃掉”的K线）。
-  // 段实例内 features/mergedFeatures 不变，结果按段缓存：绘制热路径
-  // （滚动/缩放/十字线每次重绘）避免对每个可见线段重复分配 Set 并重算。
-  // WeakMap 以段对象为键，线段重算（全量重建新对象）后缓存自动失效。
-  const consumedSisCache = new WeakMap()
-  function consumedFeatureSis(seg) {
-    let consumed = consumedSisCache.get(seg)
-    if (consumed) return consumed
-    consumed = new Set()
-    const raws = seg.features
-    const merged = seg.mergedFeatures
-    if (!raws || !merged || !raws.length || !merged.length) {
-      consumedSisCache.set(seg, consumed)
-      return consumed
-    }
-    let mi = 0
-    for (let i = 0; i < raws.length; i++) {
-      const f = raws[i]
-      while (mi < merged.length && f.fromRaw > merged[mi].toRaw) mi++
-      if (mi < merged.length) {
-        const m = merged[mi]
-        if (f.fromRaw >= m.fromRaw && f.toRaw <= m.toRaw && f.fromRaw > m.fromRaw) consumed.add(f.si)
-      }
-    }
-    consumedSisCache.set(seg, consumed)
-    return consumed
-  }
-
   function drawChan({ ctx, chart, indicator, bounding, xAxis, yAxis }) {
     const view = resolveView(indicator)
     const chanState = view.chanState
@@ -584,6 +548,18 @@
     const X = (rawIndex) => xAxis.convertToPixel(rawIndex)
     const Y = (value) => yAxis.convertToPixel(value)
 
+    // 中枢方向缓存：centerDirOf 会扫描全部线段，同一中心在本次重绘中可能被两次查询
+    // （线段中枢 + 笔中枢），缓存避免重复 O(线段数) 扫描。
+    const centerDirCache = new Map()
+    const centerDirOfCached = (cc) => {
+      let dir = centerDirCache.get(cc)
+      if (dir === undefined) {
+        dir = centerDirOf(chanState.segments, cc)
+        centerDirCache.set(cc, dir)
+      }
+      return dir
+    }
+
     // 1. 中枢（垫底）。按方向着色：向上中枢红 / 向下中枢绿；线段中枢带上下轨价格标签
     if (opts.segmentCenter) {
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
@@ -592,7 +568,7 @@
       for (const cc of visibleInRange(chanState.segmentCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
-        const up = centerDirOf(chanState.segments, cc) === 'up'
+        const up = centerDirOfCached(cc) === 'up'
         const fill = up ? COLORS.centerUp : COLORS.centerDown
         const border = up ? COLORS.centerUpBorder : COLORS.centerDownBorder
         drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), fill, border, { label: '线段中枢' })
@@ -606,7 +582,7 @@
       for (const cc of visibleInRange(chanState.strokeCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
-        const up = centerDirOf(chanState.segments, cc) === 'up'
+        const up = centerDirOfCached(cc) === 'up'
         drawCenterRect(
           ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh),
           up ? COLORS.centerUp : COLORS.centerDown,
@@ -625,74 +601,6 @@
         ctx.moveTo(X(seg.fromRaw), Y(seg.dir === 'up' ? seg.from.low : seg.from.high))
         ctx.lineTo(X(seg.toRaw), Y(seg.dir === 'up' ? seg.to.high : seg.to.low))
         ctx.stroke()
-      }
-    }
-
-    // 3. 特征序列（线段特征方向的虚拟K线，raw 原始笔，不做包含合并）
-    //    被包含合并“吃掉”的原始笔用黄色高亮，直观展示包含处理过程。
-    if (opts.featureSeq) {
-      ctx.lineWidth = 1
-      const tickW = Math.max(2, Math.min(4, gapBar * 0.3))
-      const markR = Math.max(1.5, gapBar * 0.12)
-      for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
-        const feats = seg.features
-        if (!feats || !feats.length) continue
-        const consumed = consumedFeatureSis(seg)
-        for (let i = 0; i < feats.length; i++) {
-          const f = feats[i]
-          if (f.toRaw < from || f.fromRaw > to) continue
-          const x = X((f.fromRaw + f.toRaw) / 2)
-          const isConsumed = consumed.has(f.si)
-          ctx.strokeStyle = isConsumed
-            ? COLORS.featureMerged
-            : (f.dir === 'up' ? COLORS.featureUp : COLORS.featureDown)
-          ctx.beginPath()
-          ctx.moveTo(x, Y(f.high))
-          ctx.lineTo(x, Y(f.low))
-          ctx.stroke()
-          // 开盘/收盘小横线（虚拟K线影线端）
-          ctx.beginPath()
-          ctx.moveTo(x - tickW, Y(f.fromValue))
-          ctx.lineTo(x + tickW, Y(f.fromValue))
-          ctx.stroke()
-          ctx.beginPath()
-          ctx.moveTo(x - tickW, Y(f.toValue))
-          ctx.lineTo(x + tickW, Y(f.toValue))
-          ctx.stroke()
-          // 被合并的原始笔加黄色圆点，标记“被包含处理”的K线
-          if (isConsumed) {
-            ctx.fillStyle = COLORS.featureMerged
-            ctx.beginPath()
-            ctx.arc(x, Y((f.high + f.low) / 2), markR, 0, Math.PI * 2)
-            ctx.fill()
-          }
-        }
-      }
-    }
-
-    // 4. 特征序列·合并（包含合并后的标准特征K线：实体 + 影线）
-    if (opts.mergedFeatureSeq) {
-      const bodyW = Math.max(3, gapBar * 0.5)
-      for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
-        const feats = seg.mergedFeatures
-        if (!feats || !feats.length) continue
-        for (let i = 0; i < feats.length; i++) {
-          const f = feats[i]
-          if (f.toRaw < from || f.fromRaw > to) continue
-          const x = X((f.fromRaw + f.toRaw) / 2)
-          const color = f.dir === 'up' ? COLORS.featureUp : COLORS.featureDown
-          ctx.strokeStyle = color
-          ctx.fillStyle = color
-          // 影线（合并后的高/低）
-          ctx.beginPath()
-          ctx.moveTo(x, Y(f.high))
-          ctx.lineTo(x, Y(f.low))
-          ctx.stroke()
-          // 实体（合并组最左开盘 → 最右收盘）
-          const top = Math.max(f.fromValue, f.toValue)
-          const bot = Math.min(f.fromValue, f.toValue)
-          ctx.fillRect(x - bodyW / 2, Y(top), bodyW, Math.max(1, Y(bot) - Y(top)))
-        }
       }
     }
 
@@ -830,11 +738,12 @@
         ? (d.strength === 'strong' ? COLORS.divAreaTopStrong : COLORS.divAreaTopWeak)
         : (d.strength === 'strong' ? COLORS.divAreaBottomStrong : COLORS.divAreaBottomWeak)
 
-    for (const d of chanState.divergences) {
+    // 仅绘制可见窗口内的背驰（避免全量遍历所有分歧）
+    const visibleDivs = visibleInRange(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to)
+    for (const d of visibleDivs) {
       const cur = chanState.strokes[d.si]
       const prev = chanState.strokes[d.prevSi]
       if (!cur || !prev) continue
-      if (cur.toRaw < from || prev.fromRaw > to) continue
       const color = areaColor(d)
       ctx.fillStyle = color
       // 两段走势的 MACD 柱区域高亮
@@ -1086,12 +995,11 @@
       period: state.period,
       chanState: null,
       chanOptions: { ...state.chanOptions },
-      indOptions: { volume: true, macd: true, boll: true },
+      indOptions: { volume: true, macd: true },
       chart: null,
       updater: createUpdater(),
       volId: null,
       macdId: null,
-      bollId: null,
       chanDivId: null
     }
     view.chart = klinecharts.init(containerId)
@@ -1145,10 +1053,6 @@
     if (view.indOptions.macd) {
       createMacd(view)
     }
-    if (view.indOptions.boll) {
-      // 布林带：20 周期，2 倍标准差（上/中/下轨）
-      view.bollId = view.chart.createIndicator({ name: 'BOLL', calcParams: [20, 2] })
-    }
   }
 
   function toggleIndicator(key, on) {
@@ -1159,16 +1063,12 @@
     if (on) {
       if (key === 'volume') view.volId = view.chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20] })
       else if (key === 'macd') createMacd(view)
-      else if (key === 'boll') view.bollId = view.chart.createIndicator({ name: 'BOLL', calcParams: [20, 2] })
     } else {
       if (key === 'volume' && view.volId) {
         view.chart.removeIndicator({ id: view.volId })
         view.volId = null
       } else if (key === 'macd') {
         removeMacd(view)
-      } else if (key === 'boll' && view.bollId) {
-        view.chart.removeIndicator({ id: view.bollId })
-        view.bollId = null
       }
     }
   }
@@ -1274,14 +1174,11 @@
     $('#tg-fractal').addEventListener('change', (e) => toggleChanOption('fractal', e.target.checked))
     $('#tg-stroke').addEventListener('change', (e) => toggleChanOption('stroke', e.target.checked))
     $('#tg-segment').addEventListener('change', (e) => toggleChanOption('segment', e.target.checked))
-    $('#tg-featureseq').addEventListener('change', (e) => toggleChanOption('featureSeq', e.target.checked))
-    $('#tg-mgfeatureseq').addEventListener('change', (e) => toggleChanOption('mergedFeatureSeq', e.target.checked))
     $('#tg-segcenter').addEventListener('change', (e) => toggleChanOption('segmentCenter', e.target.checked))
     $('#tg-strcenter').addEventListener('change', (e) => toggleChanOption('strokeCenter', e.target.checked))
     $('#tg-divergence').addEventListener('change', (e) => toggleChanOption('divergence', e.target.checked))
     $('#tg-volume').addEventListener('change', (e) => toggleIndicator('volume', e.target.checked))
     $('#tg-macd').addEventListener('change', (e) => toggleIndicator('macd', e.target.checked))
-    $('#tg-boll').addEventListener('change', (e) => toggleIndicator('boll', e.target.checked))
     $('#tg-china').addEventListener('change', (e) => {
       state.indOptions.chinaColors = e.target.checked
       saveState()
@@ -1356,7 +1253,6 @@
       visibleInRange,
       fmtPrice,
       centerDirOf,
-      consumedFeatureSis,
       darkStyles,
       drawChan,
       drawChanDiv,

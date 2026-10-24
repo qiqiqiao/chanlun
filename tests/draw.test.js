@@ -154,25 +154,6 @@ t('centerDirOf：中枢方向 = 价格进入中枢前的最后一条线段方向
   assert.strictEqual(app.__chanlunChart.centerDirOf(segments, { startRaw: 0, endRaw: 100 }), 'up')
 })
 
-t('consumedFeatureSis：标记被包含合并吃掉的原始特征笔', () => {
-  const app = loadApp()
-  const seg = {
-    features: [
-      { si: 1, fromRaw: 5, toRaw: 10 },
-      { si: 3, fromRaw: 15, toRaw: 20 }, // 与 si1 合并
-      { si: 5, fromRaw: 25, toRaw: 30 },
-      { si: 7, fromRaw: 35, toRaw: 40 }
-    ],
-    mergedFeatures: [
-      { fromRaw: 5, toRaw: 20 }, // 覆盖 si1+si3
-      { fromRaw: 25, toRaw: 30 }, // 独立
-      { fromRaw: 35, toRaw: 40 } // 独立（确认元素）
-    ]
-  }
-  const c = app.__chanlunChart.consumedFeatureSis(seg)
-  assert.deepStrictEqual([...c].sort(), [3], '只有 si3 被合并吃掉')
-})
-
 t('fmtPrice：按量级自适应小数位', () => {
   const app = loadApp()
   assert.strictEqual(app.__chanlunChart.fmtPrice(43520.6), '43,520.6')
