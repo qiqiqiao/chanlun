@@ -24,7 +24,7 @@
  * 否则特征序列高点不断抬高/低点不断走低时（如 71 课规则下）段永远不终结，
  * 会吞掉整个牛市/熊市（如 BTC 周线 2024-2026：向下段内包 124k 新高）。
  * 破坏检查在每笔循环最先执行（优先于待确认 pending），触发时丢弃 pending。
- * 开关：cfg.segment.destroyOnBreach（默认 true；设 false 回到纯字面规则）。
+ * 开关：cfg.segment.destroyOnBreach（默认 false；开启后启用上述扩展规则）。
  * 被破坏终结的段标记 destroyed: true。
  * ────────────────────────────────────────────────────────────────
  *
@@ -119,7 +119,7 @@
 
   // 从 segStart（已确认线段终点所在笔的索引）开始恢复扫描
   function segmentScan(strokes, segStart, cfg) {
-    const destroyOnBreach = !cfg || !cfg.segment || cfg.segment.destroyOnBreach !== false
+    const destroyOnBreach = !!(cfg && cfg.segment && cfg.segment.destroyOnBreach === true)
     const segments = []
     const confirmedSis = [] // 确认锚点：下段扫描起点（正常终结=分型终点笔；破坏终结=破坏笔）。供恢复扫描/增量锚点维护
     const n = strokes.length

@@ -72,8 +72,9 @@ Divergence is evaluated on two levels to improve reliability.
 
 **Local (stroke-level):**
 
-- Looks backward for the same-direction stroke whose extreme is exceeded.
+- Looks backward (up to `divergence.maxLookbackStrokes`, default 8 strokes) for the same-direction stroke whose extreme is exceeded.
 - Requires a stroke-level center between the two strokes (or a single large center covering both).
+- `divergenceType` distinguishes trend divergence (`trend`, ≥2 same-direction centers) from consolidation divergence (`consolidation`, 1 center); `strength` remains the big-level momentum confirmation.
 - If the current stroke's momentum strength is weaker (ratio < `divergence.minMomentumDrop`) → stroke divergence.
 - Comparison candidates with zero same-direction momentum (e.g. an early reversal whose MACD bars are still counter-direction) are skipped; the search continues to an earlier same-direction stroke with real momentum, still bounded by the "extreme must be exceeded" rule.
 
@@ -127,7 +128,7 @@ Implements the feature-sequence method as described in Lessons 67/71 of the orig
 - Uses a state machine with `pending` (second-type situations/gaps) and negation handling (`negExtreme`).
 - Each segment includes a `features` array for visualization: the direction-specific strokes used in the scan.
 - Critical fix (2024-08): corrected a bug where `features` incorrectly merged pending features on negation. Regression tests cover seeds 52, 145, and 209.
-- Segment destruction (extension rule, not literal Lessons 67/71): while a segment extends, if any stroke's extreme exceeds the segment-start extreme (up: stroke low < start low; down: stroke high > start high), the old segment ends at the breaching stroke's start and a new reversed segment begins there (marked `destroyed: true`). Only applies to established segments (≥3 strokes). Disable via `config.segment.destroyOnBreach = false` to restore the pure literal rule.
+- Segment destruction (extension rule, not literal Lessons 67/71; disabled by default): while a segment extends, if any stroke's extreme exceeds the segment-start extreme (up: stroke low < start low; down: stroke high > start high), the old segment ends at the breaching stroke's start and a new reversed segment begins there (marked `destroyed: true`). Only applies to established segments (≥3 strokes). Enable via `config.segment.destroyOnBreach = true` (or the UI toggle); destroyed segments are drawn as yellow dashed lines.
 
 ### Data Layer & Reconnection (data-layer.js)
 
@@ -141,12 +142,13 @@ Implements the feature-sequence method as described in Lessons 67/71 of the orig
 
 - Segment centers (high level): thick solid border, labeled "线段中枢".
 - Stroke centers (low level): thin dashed border, labeled "笔中枢".
-- Both display upper/lower price tags and are colored by direction (red for up, green for down).
+- Both display upper/lower price tags and follow the candle up/down color scheme (switchable via the red-up/green-down toggle).
 
 **Divergence markers:**
 
-- Strong (trend divergence): solid triangle/circle.
-- Weak (consolidation divergence): hollow circle.
+- Trend divergence: ≥2 same-direction centers between the compared strokes; consolidation divergence: 1 center.
+- Strong/weak big-level momentum confirmation: solid/hollow circle.
+- Unfinished last stroke: gray dashed warning ring (`预警`), visually distinct from confirmed divergences.
 - Up/down arrows, connecting dotted lines, and the momentum ratio.
 - The MACD pane highlights the two compared zones with semi-transparent overlays and area labels.
 
@@ -163,14 +165,15 @@ Pass a config object to `chanlun.analyze(bars, config)` or `chanlun.createAnalyz
 ```js
 {
   bi: { minGap: 4 },              // Minimum merged-bar gap within a stroke
-  segment: { method: 'feature-sequence', destroyOnBreach: true },
+  segment: { method: 'feature-sequence', destroyOnBreach: false },
   center: { minElements: 3 },
   divergence: {
     macdFast: 12,
     macdSlow: 26,
     macdSignal: 9,
     minMomentumDrop: 0.9,         // Local divergence threshold
-    requireCenter: true           // Must have a center between strokes
+    requireCenter: true,          // Must have a center between strokes
+    maxLookbackStrokes: 8         // Max strokes to look back for comparison
   }
 }
 ```

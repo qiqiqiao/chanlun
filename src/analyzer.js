@@ -228,10 +228,16 @@
         }
         const d = dirs[lastIdx]
         const keep = ris.length - 1
-        let high = raw[ris[0]].high
-        let low = raw[ris[0]].low
+        const base = raw[ris[0]]
+        let high = base.high
+        let low = base.low
+        let hiIdx = ris[0]
+        let loIdx = ris[0]
         for (let t = 1; t < keep; t++) {
           const k = raw[ris[t]]
+          const gi = ris[t]
+          const prevHigh = high
+          const prevLow = low
           if (d === 1) {
             // 向上：高高
             high = Math.max(high, k.high)
@@ -245,9 +251,14 @@
             high = Math.max(high, k.high)
             low = Math.min(low, k.low)
           }
+          // 与 resumeMerge 同口径：只有极值真正变化时才迁移下标，相等保留原下标
+          if (high !== prevHigh) hiIdx = gi
+          if (low !== prevLow) loIdx = gi
         }
         el.high = high
         el.low = low
+        el.hiIdx = hiIdx
+        el.loIdx = loIdx
         ris.length = keep
         return true
       }

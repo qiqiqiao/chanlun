@@ -13,15 +13,24 @@
   // 顶分型要求高点更高且低点也更高，底分型反之。
   // 注：包含合并后相邻K线互不包含，故“只比较对应端”的宽松口径与这里完全等价，
   // 不再提供 fractal.mode 选项（旧口径已移除）。
+  // 极值所在的原始K线下标：顶分型取最高价来源，底分型取最低价来源。
+  // 合并K线可能由多根原始K线组成，rawMiddle（中间那根）不一定产生极值；
+  // 旧版用它作为笔端点，导致端点偏离真实影线尖最多若干根。兼容旧数据/手工
+  // 构造的 merged 元素：缺少 hiIdx/loIdx 时退回 rawMiddle。
+  function extremeRawIndex(m, type) {
+    const idx = type === 'top' ? m.hiIdx : m.loIdx
+    return idx !== undefined ? idx : m.rawMiddle
+  }
+
   function fractalAt(merged, i) {
     const m = merged[i]
     const p = merged[i - 1]
     const n = merged[i + 1]
     if (m.high > p.high && m.high > n.high && m.low > p.low && m.low > n.low) {
-      return { type: 'top', mi: i, high: m.high, low: m.low, rawMiddle: m.rawMiddle }
+      return { type: 'top', mi: i, high: m.high, low: m.low, rawMiddle: extremeRawIndex(m, 'top') }
     }
     if (m.low < p.low && m.low < n.low && m.high < p.high && m.high < n.high) {
-      return { type: 'bottom', mi: i, high: m.high, low: m.low, rawMiddle: m.rawMiddle }
+      return { type: 'bottom', mi: i, high: m.high, low: m.low, rawMiddle: extremeRawIndex(m, 'bottom') }
     }
     return null
   }

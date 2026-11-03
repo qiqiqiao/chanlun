@@ -97,7 +97,7 @@ t('visibleInRange：窗口完全包含中枢 / 多个中枢', () => {
 
 t('drawChan：横跨左边界的线段中枢被绘制（端到端回归）', () => {
   const app = loadApp()
-  // 数据：seed 99 的 3000 根随机K线 → 线段中枢 [2221-2990]（破坏规则下）
+  // 数据：seed 99 的 3000 根随机K线 → 标准规则下线段中枢 [1893-2989]
   const bars = randomWalk(3000, 99)
   app.__chanlunChart.runChanCalc(bars)
   const centers = app.__chanlunChart.chanState.segmentCenters
@@ -133,9 +133,9 @@ t('drawChan：横跨左边界的线段中枢被绘制（端到端回归）', () 
 
   const fills = rects.filter((r) => r.kind === 'fill')
   assert(fills.length >= 1, '窗口 [2500,3000] 下必须绘制线段中枢（旧版漏画）')
-  // 找到对应 [2221-2990] 中枢的矩形：x = 2221 - 4 = 2217, w = (2990-2221) + 8 = 777
-  const hit = fills.find((r) => Math.abs(r.x - 2217) < 0.01 && Math.abs(r.w - 777) < 0.01)
-  assert(hit, '绘制矩形必须覆盖中枢 [2221-2990] 的 x 范围，实际: ' + JSON.stringify(fills))
+  // 找到对应 [1893-2989] 中枢的矩形：x = 1893 - 4 = 1889, w = (2989-1893) + 8 = 1104
+  const hit = fills.find((r) => Math.abs(r.x - 1889) < 0.01 && Math.abs(r.w - 1104) < 0.01)
+  assert(hit, '绘制矩形必须覆盖中枢 [1893-2989] 的 x 范围，实际: ' + JSON.stringify(fills))
 })
 
 t('centerDirOf：中枢方向 = 价格进入中枢前的最后一条线段方向', () => {
@@ -214,6 +214,78 @@ t('darkStyles：红涨绿跌切换生效', () => {
   assert.strictEqual(s.candle.bar.upColor, '#ef5350', '红涨绿跌阳=红')
   assert.strictEqual(s.indicator.bars[0].upColor, '#ef5350')
   app.__chanlunChart.state.indOptions.chinaColors = false
+})
+
+t('centerPalette：中枢配色跟随红涨绿跌开关', () => {
+  const app = loadApp()
+  const cp = app.__chanlunChart.centerPalette
+  app.__chanlunChart.state.indOptions.chinaColors = false
+  assert.strictEqual(cp(true).border, 'rgb(0, 204, 0)', '默认向上中枢=绿')
+  assert.strictEqual(cp(false).border, 'rgb(239, 83, 80)', '默认向下中枢=红')
+  app.__chanlunChart.state.indOptions.chinaColors = true
+  assert.strictEqual(cp(true).border, 'rgb(239, 83, 80)', '红涨绿跌下向上中枢=红')
+  assert.strictEqual(cp(false).border, 'rgb(0, 204, 0)', '红涨绿跌下向下中枢=绿')
+  app.__chanlunChart.state.indOptions.chinaColors = false
+})
+
+t('drawChan：背驰比较连线为虚线；未完成笔用灰色虚线圈 + 预警标签', () => {
+  const app = loadApp()
+  const bars = randomWalk(3000, 99)
+  app.__chanlunChart.runChanCalc(bars)
+  const chanState = app.__chanlunChart.chanState
+  assert(chanState.divergences.length >= 1, '数据应产生背驰')
+  // 人为把首个事件标为未完成，验证视觉降级（真实尾笔也可能出现）
+  chanState.divergences[0].provisional = true
+
+  const dashCalls = []
+  const texts = []
+  const ctx = {
+    fillStyle: '', strokeStyle: '', lineWidth: 0, font: '', textAlign: '', textBaseline: '',
+    setLineDash(v) { dashCalls.push((v || []).join(',')) },
+    fillRect() {}, strokeRect() {},
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, closePath() {}, fill() {}, arc() {},
+    fillText(s) { texts.push(s) }
+  }
+  const chart = {
+    getVisibleRange: () => ({ realFrom: 0, realTo: 3000 }),
+    getBarSpace: () => ({ gapBar: 8, halfGapBar: 4 })
+  }
+  const xAxis = { convertToPixel: (v) => v }
+  const yAxis = { convertToPixel: (v) => 1000 - v }
+  const o = app.__chanlunChart.state.chanOptions
+  o.fractal = false; o.stroke = false; o.segment = false; o.segmentCenter = false; o.strokeCenter = false
+  o.divergence = true
+  app.__chanlunChart.drawChan({ ctx, chart, indicator: {}, bounding: {}, xAxis, yAxis })
+
+  assert(dashCalls.includes('3,3'), '比较连线必须设置虚线（setLineDash(true)）')
+  assert(texts.includes('顶预警') || texts.includes('底预警'), '未完成笔应显示预警标签, got ' + JSON.stringify(texts.slice(0, 12)))
+})
+
+t('drawChan：被线段破坏规则终结的线段以虚线绘制', () => {
+  const app = loadApp()
+  app.__chanlunChart.state.chanOptions.segmentDestroy = true
+  app.__chanlunChart.runChanCalc(randomWalk(3000, 99))
+  const destroyed = app.__chanlunChart.chanState.segments.filter((s) => s.destroyed)
+  assert(destroyed.length >= 1, '扩展规则下应出现 destroyed 线段')
+
+  const dashCalls = []
+  const ctx = {
+    fillStyle: '', strokeStyle: '', lineWidth: 0, font: '', textAlign: '', textBaseline: '',
+    setLineDash(v) { dashCalls.push((v || []).join(',')) },
+    fillRect() {}, strokeRect() {},
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, closePath() {}, fill() {}, arc() {}, fillText() {}
+  }
+  const chart = {
+    getVisibleRange: () => ({ realFrom: 0, realTo: 3000 }),
+    getBarSpace: () => ({ gapBar: 8, halfGapBar: 4 })
+  }
+  const xAxis = { convertToPixel: (v) => v }
+  const yAxis = { convertToPixel: (v) => 1000 - v }
+  const o = app.__chanlunChart.state.chanOptions
+  o.segment = true; o.segmentCenter = false; o.strokeCenter = false
+  o.fractal = false; o.stroke = false; o.divergence = false
+  app.__chanlunChart.drawChan({ ctx, chart, indicator: {}, bounding: {}, xAxis, yAxis })
+  assert(dashCalls.includes('6,4'), '被破坏线段必须使用虚线')
 })
 
 t('drawChanDiv：MACD副图按可见背驰绘制两段面积高亮 + 虚线连接', () => {

@@ -4,7 +4,7 @@
  * 全部规则参数化，行为与旧版一致。
  *   bi.minGap        ：笔内合并K线的最小间隔（两端分型的 mi 差）
  *   segment.method   ：特征序列法（当前仅此一种口径）
-  *   segment.destroyOnBreach：线段破坏扩展规则（默认开）
+  *   segment.destroyOnBreach：线段破坏扩展规则（默认关，开启后为实战扩展规则）
  *   center.minElements：中枢最少元素数（笔/线段）
  *   divergence.*     ：笔背驰（MACD 柱面积动量 + 大级别=线段动量确认）
  *
@@ -19,7 +19,7 @@
     },
     segment: {
       method: 'feature-sequence', // 特征序列法（当前仅此一种口径）
-      destroyOnBreach: true // 线段破坏：超越段起点极值即终结（扩展规则；false 回纯字面规则）
+      destroyOnBreach: false // 线段破坏：超越段起点极值即终结（非标准扩展规则，默认关闭）
     },
     center: {
       minElements: 3 // 中枢最少元素数（笔/线段）
@@ -29,7 +29,8 @@
       macdSlow: 26, // 慢线
       macdSignal: 9, // 信号线
       minMomentumDrop: 0.9, // 后笔动量 < 前同向笔动量 × 该值 → 局部背驰
-      requireCenter: true // 两笔间需存在笔中枢（趋势背驰口径）
+      requireCenter: true, // 两笔间需存在笔中枢（趋势背驰口径）
+      maxLookbackStrokes: 8 // 最多向前回溯的笔数（避免跨多个结构远距离误配）
     }
   }
 

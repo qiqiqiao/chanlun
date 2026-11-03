@@ -44,9 +44,10 @@
           <label><input type="checkbox" id="tg-fractal" checked> 分型</label>
           <label><input type="checkbox" id="tg-stroke" checked> 笔</label>
           <label><input type="checkbox" id="tg-segment" checked> 线段</label>
+          <label title="线段破坏（非标准扩展规则）：某笔超越线段起点极值即强行终结旧段。关闭时使用 67/71 课字面特征序列规则；开启后被破坏终结的线段显示为黄色虚线"><input type="checkbox" id="tg-segdestroy"> 线段破坏</label>
           <label title="线段中枢：由3条以上线段重叠构成，级别高，粗实线红/绿框 + 上下轨价格标签"><input type="checkbox" id="tg-segcenter" checked> 线段中枢</label>
           <label title="笔中枢：由3条以上笔重叠构成，级别低，细虚线框，框内标「笔中枢」"><input type="checkbox" id="tg-strcenter"> 笔中枢</label>
-          <label title="笔背驰：两段同向离开中枢的走势比较 MACD 动量。趋背=强背驰(实心圆点)，盘背=弱背驰(空心圆环)；MACD 副图高亮两段面积并标注 A/B"><input type="checkbox" id="tg-divergence" checked> 笔背驰</label>
+          <label title="笔背驰：两段同向离开中枢的走势比较 MACD 动量。趋背=比较区间≥2个同向中枢，盘背=1个；实心/空心圆点表示大级别动量是否同步衰减；未完成笔显示灰色虚线圈+预警。MACD 副图高亮两段面积并标注 A/B"><input type="checkbox" id="tg-divergence" checked> 笔背驰</label>
           <label title="成交量柱状图 + 均量线 MA5/10/20"><input type="checkbox" id="tg-volume" checked> 交易量</label>
           <label title="MACD 标准图（DIF/DEA + 柱状线）；开启后在副图叠加背驰面积高亮"><input type="checkbox" id="tg-macd" checked> MACD</label>
           <label title="K线配色切换：西式(阳绿阴红) ⇄ 中国习惯(阳红阴绿)，VOL/MACD 柱同步"><input type="checkbox" id="tg-china"> 红涨绿跌</label>

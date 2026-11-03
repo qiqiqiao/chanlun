@@ -16,7 +16,9 @@
       segment: true,
       segmentCenter: true,
       strokeCenter: false,
-      divergence: true
+      divergence: true,
+      // 线段破坏是扩展规则（非 67/71 课字面内容），默认关闭
+      segmentDestroy: false
     },
     indOptions: {
       volume: true,
@@ -57,6 +59,7 @@
     ['chanOptions', 'segmentCenter', 'tg-segcenter'],
     ['chanOptions', 'strokeCenter', 'tg-strcenter'],
     ['chanOptions', 'divergence', 'tg-divergence'],
+    ['chanOptions', 'segmentDestroy', 'tg-segdestroy'],
     ['indOptions', 'volume', 'tg-volume'],
     ['indOptions', 'macd', 'tg-macd'],
     ['indOptions', 'chinaColors', 'tg-china']
@@ -134,16 +137,28 @@
     divAreaTopWeak: 'rgba(255, 93, 122, 0.22)',
     divAreaBottomStrong: 'rgba(0, 230, 118, 0.40)',
     divAreaBottomWeak: 'rgba(63, 214, 127, 0.22)',
-    // 中枢方向着色：向上中枢红（缠论惯例：向上=红）、向下中枢绿
-    centerUp: 'rgba(255, 77, 143, 0.18)',
-    centerUpBorder: '#ff4d8f',
-    centerDown: 'rgba(0, 230, 118, 0.14)',
-    centerDownBorder: '#00e676',
+    // 被线段破坏规则强行终结的线段（扩展规则才会出现）
+    segmentDestroyed: '#ffd54f',
     // 背驰标记：强背驰高亮（顶=红 / 底=绿），弱背驰半透明提示
     divergenceTopStrong: '#ff2d55',
     divergenceTopWeak: 'rgba(255, 93, 122, 0.6)',
     divergenceBottomStrong: '#00e676',
-    divergenceBottomWeak: 'rgba(63, 214, 127, 0.55)'
+    divergenceBottomWeak: 'rgba(63, 214, 127, 0.55)',
+    // 最后一笔尚未完成：预警状态，与已确认背驰区分（灰色虚线圈）
+    divergenceProvisional: 'rgba(176, 184, 196, 0.9)'
+  }
+
+  // 中枢配色跟随 K 线涨跌色（默认西式阳绿阴红 / 中国习惯阳红阴绿）。
+  // 这样向上中枢不会在绿涨红跌的图里被误读成“上涨”。
+  function centerPalette(up) {
+    const china = !!state.indOptions.chinaColors
+    const upRgb = china ? '239, 83, 80' : '0, 204, 0'
+    const downRgb = china ? '0, 204, 0' : '239, 83, 80'
+    const rgb = up ? upRgb : downRgb
+    return {
+      fill: 'rgba(' + rgb + ', ' + (up ? 0.18 : 0.14) + ')',
+      border: 'rgb(' + rgb + ')'
+    }
   }
 
   // 单图表视图的运行状态（多周期联动已移除，不再需要视图反查表/兜底视图）
@@ -376,7 +391,15 @@
     ALGO_DEFAULTS.divergence.macdSlow,
     ALGO_DEFAULTS.divergence.macdSignal
   ]
-  const CHAN_CONFIG = { bi: { minGap: ALGO_DEFAULTS.bi.minGap } }
+  // 配置快照：线段破坏开关来自 UI（默认关，标准特征序列规则）
+  function chanConfig() {
+    return {
+      bi: { minGap: ALGO_DEFAULTS.bi.minGap },
+      segment: {
+        destroyOnBreach: state.chanOptions.segmentDestroy === true
+      }
+    }
+  }
 
   // 实时更新策略在 realtime.js：用【内容签名】判断末根变化（对象原地改值也能识别），
   // 而不是对象引用。klinecharts 可能复用同一 bar 对象并原地修改 OHLC，
@@ -384,7 +407,7 @@
   function createUpdater() {
     return window.realtime.createRealtimeUpdater({
       createAnalyzer: (cfg) => window.chanlun.createAnalyzer(cfg),
-      config: CHAN_CONFIG
+      config: chanConfig()
     })
   }
 
@@ -452,7 +475,8 @@
     el.textContent =
       state.symbol +
       ' · ' + currentExchange().label +
-      ' | 分型 ' + chanState.fractals.length +
+      // chanState.fractals 实际是笔端点（过滤后的有效分型序列），不是全部分型
+      ' | 笔端点 ' + chanState.fractals.length +
       ' · 笔 ' + chanState.strokes.length +
       ' · 线段 ' + finished + '+' + (chanState.segments.length - finished) +
       ' · 线段中枢 ' + chanState.segmentCenters.length +
@@ -520,8 +544,18 @@
     return v.toLocaleString('zh-CN', { maximumFractionDigits: d })
   }
 
-  // 中枢方向：价格进入中枢前的最后一条线段方向（向上中枢=红 / 向下中枢=绿）。
-  // 中枢是两段趋势之间的震荡，用“进入中枢的走向”判定最贴近缠论直觉。
+  // 给压在K线上的小字加半透明底板（仅在真实 Canvas 环境生效；
+  // 测试用 fake ctx 可能没有 measureText，此时退化为无底板）。
+  function fillTextBackground(ctx, text, x, y) {
+    if (typeof ctx.measureText !== 'function') return
+    const w = ctx.measureText(text).width + 6
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.62)'
+    ctx.fillRect(x - w / 2, y - 10, w, 12)
+  }
+
+  // 中枢方向：价格进入中枢前的最后一条线段方向。
+  // 中枢是两段趋势之间的震荡，用“进入中枢的走向”判定最贴近缠论直觉；
+  // 颜色本身由 centerPalette 跟随当前 K 线涨跌配色。
   function centerDirOf(segments, cc) {
     let incoming = null
     for (const s of segments) {
@@ -560,7 +594,7 @@
       return dir
     }
 
-    // 1. 中枢（垫底）。按方向着色：向上中枢红 / 向下中枢绿；线段中枢带上下轨价格标签
+    // 1. 中枢（垫底）。颜色跟随 K 线涨跌色，方向由进入中枢的走势决定；线段中枢带上下轨价格标签
     if (opts.segmentCenter) {
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
       ctx.textAlign = 'left'
@@ -569,11 +603,10 @@
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
         const up = centerDirOfCached(cc) === 'up'
-        const fill = up ? COLORS.centerUp : COLORS.centerDown
-        const border = up ? COLORS.centerUpBorder : COLORS.centerDownBorder
-        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), fill, border, { label: '线段中枢' })
+        const palette = centerPalette(up)
+        drawCenterRect(ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh), palette.fill, palette.border, { label: '线段中枢' })
         // 上下轨价格标签（画在右轨外侧）
-        ctx.fillStyle = border
+        ctx.fillStyle = palette.border
         ctx.fillText(fmtPrice(cc.zsHigh), X(cc.endRaw) + 4, Y(cc.zsHigh) - 4)
         ctx.fillText(fmtPrice(cc.zsLow), X(cc.endRaw) + 4, Y(cc.zsLow) - 1)
       }
@@ -583,25 +616,29 @@
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
         const up = centerDirOfCached(cc) === 'up'
+        const palette = centerPalette(up)
         drawCenterRect(
           ctx, x, Y(cc.zsHigh), w, Y(cc.zsLow) - Y(cc.zsHigh),
-          up ? COLORS.centerUp : COLORS.centerDown,
-          up ? COLORS.centerUpBorder : COLORS.centerDownBorder,
+          palette.fill, palette.border,
           { label: '笔中枢', dashed: true }
         )
       }
     }
 
-    // 2. 线段
+    // 2. 线段（被“线段破坏”扩展规则强行终结的段用虚线 + 警示色区分）
     if (opts.segment) {
       ctx.lineWidth = 2.2
-      ctx.strokeStyle = COLORS.segment
+      const setSegDash = typeof ctx.setLineDash === 'function' ? (on) => ctx.setLineDash(on ? [6, 4] : []) : null
       for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
+        const destroyed = seg.destroyed === true
+        ctx.strokeStyle = destroyed ? COLORS.segmentDestroyed : COLORS.segment
+        if (setSegDash) setSegDash(destroyed)
         ctx.beginPath()
         ctx.moveTo(X(seg.fromRaw), Y(seg.dir === 'up' ? seg.from.low : seg.from.high))
         ctx.lineTo(X(seg.toRaw), Y(seg.dir === 'up' ? seg.to.high : seg.to.low))
         ctx.stroke()
       }
+      if (setSegDash) setSegDash(false)
     }
 
     // 5. 笔
@@ -645,7 +682,9 @@
     }
 
     // 7. 笔背驰标记：▼/▲ 箭头 + 与前比较笔的虚线连接 + 趋背/盘背区分 + 强度比
-    //    强背驰（趋背，线段动量同向衰减）高亮圆点，弱背驰（盘背）空心圆环。
+    //    divergenceType 由同向中枢数量决定（≥2=趋背，1=盘背）；strength 仍表示
+    //    大级别线段动量是否同步衰减（实心/空心圆点）。
+    //    最后一笔未完成时只给灰色虚线圈 + “预警”，不与已确认背驰同权显示。
     if (opts.divergence && chanState.divergences) {
       ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
       ctx.textAlign = 'center'
@@ -654,14 +693,18 @@
       const setDash = typeof ctx.setLineDash === 'function' ? (on) => ctx.setLineDash(on ? [3, 3] : []) : null
       for (const d of visibleInRange(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to)) {
         const strong = d.strength === 'strong'
-        const color = strong
-          ? (d.kind === 'top' ? COLORS.divergenceTopStrong : COLORS.divergenceBottomStrong)
-          : (d.kind === 'top' ? COLORS.divergenceTopWeak : COLORS.divergenceBottomWeak)
+        const provisional = d.provisional === true
+        const color = provisional
+          ? COLORS.divergenceProvisional
+          : strong
+            ? (d.kind === 'top' ? COLORS.divergenceTopStrong : COLORS.divergenceBottomStrong)
+            : (d.kind === 'top' ? COLORS.divergenceTopWeak : COLORS.divergenceBottomWeak)
         const x = X(d.rawIndex)
         const yPrice = Y(d.value)
         // 与前一根同向比较笔的虚线连接（一眼看到“拿谁跟谁比”）
         const prevStroke = chanState.strokes[d.prevSi]
         if (prevStroke && setDash) {
+          setDash(true)
           ctx.strokeStyle = color
           ctx.beginPath()
           ctx.moveTo(x, yPrice)
@@ -679,12 +722,12 @@
         }
         // 方向箭头 + 趋背/盘背标签（顶背驰指向下跌 ▼，底背驰指向上涨 ▲）
         const arrow = d.kind === 'top' ? '▼' : '▲'
-        const sub = strong ? '趋背' : '盘背'
+        const sub = d.divergenceType === 'trend' ? '趋背' : '盘背'
         ctx.fillStyle = color
         ctx.font = 'bold 12px system-ui, -apple-system, "Segoe UI", sans-serif'
         ctx.fillText(arrow, x, d.kind === 'top' ? yPrice - 12 : yPrice + 18)
         ctx.font = 'bold 10px system-ui, -apple-system, "Segoe UI", sans-serif'
-        const label = (d.kind === 'top' ? '顶' : '底') + sub
+        const label = provisional ? (d.kind === 'top' ? '顶预警' : '底预警') : (d.kind === 'top' ? '顶' : '底') + sub
         ctx.fillText(label, x, d.kind === 'top' ? yPrice - 26 : yPrice + 31)
         // 面积数值（面积 = 单位强度 × 窗口K线数；副图高亮失败时也有数据支撑）
         if (d.momentum) {
@@ -694,15 +737,21 @@
             const aCur = d.momentum.current * (curS.toRaw - curS.fromRaw + 1)
             const aPrev = d.momentum.previous * (prevS.toRaw - prevS.fromRaw + 1)
             ctx.font = '9px system-ui, -apple-system, "Segoe UI", sans-serif'
-            ctx.fillText('A ' + aCur.toFixed(1) + ' · B ' + aPrev.toFixed(1), x, d.kind === 'top' ? yPrice - 39 : yPrice + 44)
+            const areaLabel = 'A ' + aCur.toFixed(1) + ' · B ' + aPrev.toFixed(1)
+            const labelY = d.kind === 'top' ? yPrice - 39 : yPrice + 44
+            fillTextBackground(ctx, areaLabel, x, labelY)
+            ctx.fillStyle = color
+            ctx.fillText(areaLabel, x, labelY)
           }
         }
-        // 圆点（强=实心 / 弱=空心）
+        // 圆点（强=实心 / 弱=空心 / 未完成=灰色虚线圈）
         ctx.strokeStyle = color
+        if (setDash) setDash(provisional)
         ctx.beginPath()
-        ctx.arc(x, yPrice, strong ? 5 : 4, 0, Math.PI * 2)
-        if (strong) ctx.fill()
+        ctx.arc(x, yPrice, strong && !provisional ? 5 : 4, 0, Math.PI * 2)
+        if (strong && !provisional) ctx.fill()
         else ctx.stroke()
+        if (setDash) setDash(false)
       }
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
     }
@@ -1129,6 +1178,29 @@
     }
   }
 
+  // 改变会影响计算结构的规则（如线段破坏）时，重建 analyzer 并重算当前数据。
+  // 否则只切换显示开关不会刷新线段/中枢。
+  function toggleChanRule(key, on) {
+    state.chanOptions[key] = on
+    saveState()
+    if (!mainView) return
+    mainView.chanOptions[key] = on
+    mainView.updater = createUpdater()
+    mainView.chanState = null
+    if (!mainView.chart) return
+    const dataList = mainView.chart.getDataList()
+    if (dataList && dataList.length) {
+      const r = mainView.updater.update(dataList)
+      mainView.chanState = r.state
+      updateStatus()
+    }
+    mainView.chart.overrideIndicator({
+      name: 'CHAN',
+      paneId: 'candle_pane',
+      extendData: { ...mainView.chanOptions }
+    })
+  }
+
   function bindUI() {
     $('#exchange').addEventListener('change', (e) => {
       state.exchange = e.target.value
@@ -1177,6 +1249,7 @@
     $('#tg-segcenter').addEventListener('change', (e) => toggleChanOption('segmentCenter', e.target.checked))
     $('#tg-strcenter').addEventListener('change', (e) => toggleChanOption('strokeCenter', e.target.checked))
     $('#tg-divergence').addEventListener('change', (e) => toggleChanOption('divergence', e.target.checked))
+    $('#tg-segdestroy').addEventListener('change', (e) => toggleChanRule('segmentDestroy', e.target.checked))
     $('#tg-volume').addEventListener('change', (e) => toggleIndicator('volume', e.target.checked))
     $('#tg-macd').addEventListener('change', (e) => toggleIndicator('macd', e.target.checked))
     $('#tg-china').addEventListener('change', (e) => {
@@ -1253,6 +1326,7 @@
       visibleInRange,
       fmtPrice,
       centerDirOf,
+      centerPalette,
       darkStyles,
       drawChan,
       drawChanDiv,

@@ -162,7 +162,8 @@ t('特征序列·合并：包含元素合并成一根K线，范围覆盖全部�
     mkStroke(6, 'up', 105, 107),
     mkStroke(7, 'down', 107, 98) // 特征 e2：high107 low98（fromRaw30 toRaw35，确认元素）
   ]
-  const r = c.segmentScan(strokes, 0)
+  // 该用例专门验证破坏规则下的特征序列合并 → 显式开启扩展规则
+  const r = c.segmentScan(strokes, 0, c.normalizeConfig({ segment: { destroyOnBreach: true } }))
   const seg0 = r.segments[0]
   assert.strictEqual(seg0.dir, 'up')
   assert.strictEqual(seg0.finished, true)

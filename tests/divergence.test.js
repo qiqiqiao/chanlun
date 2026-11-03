@@ -125,6 +125,7 @@ t('局部衰减+大级别同向衰减 → 强背驰 confirmed', () => {
   assert(out.length >= 1, '至少一个事件: ' + JSON.stringify(out))
   const d = out[out.length - 1]
   assert(d.si === 2 && d.kind === 'top' && d.prevSi === 0, '顶背驰 si=2 对比 si=0')
+  assert(d.divergenceType === 'consolidation' && d.trendCenterCount === 1, '单中枢 → 盘整背驰')
   assert(d.momentum.ratio < 0.9, '动量衰减 ratio=' + d.momentum.ratio)
   assert(d.bigLevel.aligned === true, '大级别同向')
   assert(d.bigLevel.fading === true, '大级别动量衰减')
@@ -170,6 +171,47 @@ t('requireCenter=false 时无需中枢即可判；开启则不判', () => {
   const on = c.normalizeConfig({ divergence: { requireCenter: true } })
   assert(c.calcDivergences(kase.strokes, [], [], kase.merged, kase.closes, off).length === 1, '关闭要求 → 触发')
   assert(c.calcDivergences(kase.strokes, [], [], kase.merged, kase.closes, on).length === 0, '开启要求+无中枢 → 不判')
+})
+
+t('maxLookbackStrokes 限制回溯距离，避免跨多个结构远距离比较', () => {
+  const hists = new Array(86).fill(1)
+  for (let i = 70; i <= 80; i++) hists[i] = 0.05 // 末笔动量明显衰减
+  const merged = identityMerged(hists.length)
+  const strokes = [
+    fakeStroke(0, 'up', 12, 32, 180),
+    fakeStroke(1, 'down', 32, 40, 156),
+    fakeStroke(2, 'up', 40, 60, 190), // 中间同向笔（无中枢，被跳过）
+    fakeStroke(3, 'down', 60, 70, 160),
+    fakeStroke(4, 'up', 70, 80, 200)
+  ]
+  const centers = [{ startIndex: 1, endIndex: 1 }]
+  const near = c.normalizeConfig({ divergence: { requireCenter: true, maxLookbackStrokes: 4 } })
+  const far = c.normalizeConfig({ divergence: { requireCenter: true, maxLookbackStrokes: 3 } })
+  const outNear = c.calcDivergences(strokes, [], centers, merged, [], near, hists)
+  assert(outNear.length === 1 && outNear[0].prevSi === 0 && outNear[0].lookback === 4, '上限内可比较')
+  const outFar = c.calcDivergences(strokes, [], centers, merged, [], far, hists)
+  assert(outFar.length === 0, '超过回溯上限 → 不比较')
+})
+
+t('同向中枢数量区分趋势背驰/盘整背驰', () => {
+  const hists = new Array(86).fill(1)
+  for (let i = 70; i <= 80; i++) hists[i] = 0.05
+  const merged = identityMerged(hists.length)
+  const strokes = [
+    fakeStroke(0, 'up', 12, 32, 180),
+    fakeStroke(1, 'down', 32, 40, 156),
+    fakeStroke(2, 'up', 40, 60, 190),
+    fakeStroke(3, 'down', 60, 70, 160),
+    fakeStroke(4, 'up', 70, 80, 200)
+  ]
+  // 两个同向中枢都位于比较区间内（第二个中枢不阻碍选择 prevSi=0）
+  const one = [{ startIndex: 1, endIndex: 1 }]
+  const two = [{ startIndex: 0, endIndex: 1 }, { startIndex: 1, endIndex: 1 }]
+  const cfg = c.normalizeConfig({ divergence: { requireCenter: true, maxLookbackStrokes: 4 } })
+  const a = c.calcDivergences(strokes, [], one, merged, [], cfg, hists)[0]
+  const b = c.calcDivergences(strokes, [], two, merged, [], cfg, hists)[0]
+  assert(a.divergenceType === 'consolidation' && a.trendCenterCount === 1, '单中枢=盘整背驰')
+  assert(b.divergenceType === 'trend' && b.trendCenterCount === 2, '两同向中枢=趋势背驰')
 })
 
 t('未创极值的同向笔终止回溯，不产生跨段误配', () => {

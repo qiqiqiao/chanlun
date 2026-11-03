@@ -4,6 +4,7 @@
  * 把存在包含关系的K线合并，得到“缠论K线”。
  *   mergeBars  = 全量；resumeMerge = 从已有 merged 续接（增量/回退重放共用）
  *   dirs[i] 记录“处理完 merged[i] 后的方向”，增量续接时从此恢复
+ *   hiIdx/loIdx 记录贡献合并K线最高/最低价的原始K线下标（笔端点定位用）
  *
  * 合并方向规则（《教你炒股票》第 65 课）：
  *   向上趋势：包含时取更高的高点与更高的低点（高高）
@@ -23,7 +24,7 @@
       const k = klines[i]
       const gi = startIndex + i
       if (merged.length === 0) {
-        merged.push({ high: k.high, low: k.low, rawIndices: [gi] })
+        merged.push({ high: k.high, low: k.low, rawIndices: [gi], hiIdx: gi, loIdx: gi })
         dirs.push(0)
         pushedCount++
         continue
@@ -33,6 +34,8 @@
         (k.high >= last.high && k.low <= last.low) ||
         (k.high <= last.high && k.low >= last.low)
       if (contained) {
+        const prevHigh = last.high
+        const prevLow = last.low
         if (direction === 1) {
           // 向上趋势：包含时取更高的高点与更高的低点
           last.high = Math.max(last.high, k.high)
@@ -46,11 +49,15 @@
           last.high = Math.max(last.high, k.high)
           last.low = Math.min(last.low, k.low)
         }
+        // 记录真正贡献极值的原始K线下标（分型/笔端点必须落在影线尖上）。
+        // 相等时保留原下标，保证回退重放与全量合并的结果一致。
+        if (last.high !== prevHigh) last.hiIdx = gi
+        if (last.low !== prevLow) last.loIdx = gi
         last.rawIndices.push(gi)
         lastUpdated = true
       } else {
         direction = k.high > last.high ? 1 : -1
-        merged.push({ high: k.high, low: k.low, rawIndices: [gi] })
+        merged.push({ high: k.high, low: k.low, rawIndices: [gi], hiIdx: gi, loIdx: gi })
         dirs.push(direction)
         pushedCount++
       }

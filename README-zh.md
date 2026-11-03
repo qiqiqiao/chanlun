@@ -42,8 +42,8 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 
 `src/divergence.js`，判据分两层：
 
-1. **局部（笔级别）**：向前找最近一根「可超越」的同向笔（遇到未创新高/新低的
-   同向笔即停止回溯），两笔之间需存在笔中枢（中枢起于两笔之间，或单一延伸
+1. **局部（笔级别）**：在 `maxLookbackStrokes`（默认 8 笔）范围内向前找最近一根
+   「可超越」的同向笔（遇到未创新高/新低的同向笔即停止回溯），两笔之间需存在笔中枢（中枢起于两笔之间，或单一延伸
    大中枢覆盖两笔——盘整背驰）。后笔创出极值但**动量强度**弱于前笔
    （强度比 < `divergence.minMomentumDrop`）→ 笔背驰。动量为 0 的同向笔
    （如早期反转笔尚无同向 MACD 柱）不参与比较，继续向前找有实际同向动量的
@@ -51,6 +51,10 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 2. **大级别（线段级别）确认**：后笔所在线段 vs 其前一条已完结同向线段比较动量：
    - 大级别动量同步衰减 + 线段方向与笔同向 → **强背驰**（confirmed）；
    - 大级别动量仍在扩张或无比价 → **弱背驰**（更可能是中枢震荡/回调）。
+
+> `divergenceType` 由两笔比较区间内的同向中枢数量决定：≥2 个为 `trend`（趋背），
+> 1 个为 `consolidation`（盘背）。`strength` 只表示大级别动量是否同步衰减，
+> 两者不再混用。
 
 动量度量 = **单位K线同向 MACD 柱面积**：`hist = 2*(DIF-DEA)`（12/26/9），
 区间只累计与移动方向同向的柱（上行取正柱、下行取负柱绝对值）再除以窗口K线数。
@@ -62,10 +66,11 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 ```
 {
   si, kind: 'top'|'bottom', dir, prevSi,   // 背驰笔与被比较笔
-  rawIndex, value, provisional,            // 位置；尾笔未定型标记
+  lookback, rawIndex, value, provisional,  // 回溯笔数；位置；尾笔未定型标记
   momentum: { current, previous, ratio },  // 动量强度与比值
   bigLevel: { segmentSi, aligned, momentumRatio, fading },
-  strength: 'strong'|'weak', confirmed
+  strength: 'strong'|'weak', confirmed,
+  divergenceType: 'trend'|'consolidation', trendCenterCount
 }
 ```
 
@@ -124,7 +129,7 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
 
 ```
 {
-  merged,          // 合并后K线（含 rawIndices / rawMiddle / rawStart / rawEnd）
+  merged,          // 合并后K线（含 rawIndices / rawMiddle / rawStart / rawEnd / hiIdx / loIdx）
   fractals,        // 有效分型（笔端点）
   strokes,         // 笔（si/dir/from/to/fromRaw/toRaw/fromValue/toValue/high/low）
   segments,        // 线段（dir/from/to/fromRaw/toRaw/finished/features）
@@ -150,12 +155,15 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
 - **K线配色**：默认西式（阳=绿 / 阴=红）；勾选「红涨绿跌」一键切换为中国习惯
   （阳=红 / 阴=绿），VOL / MACD 柱颜色同步切换。
 - **中枢级别标注**：线段中枢（高级别）= 粗实线框 + 框内「线段中枢」标签 + 上下轨
-  价格标签；笔中枢（低级别）= 细虚线框 + 框内「笔中枢」标签。二者均按方向着色
-  （向上红 / 向下绿，方向 = 价格进入中枢前的最后一条线段方向），开关独立。
+  价格标签；笔中枢（低级别）= 细虚线框 + 框内「笔中枢」标签。中枢颜色跟随
+  K线涨跌色（勾选「红涨绿跌」后向上红/向下绿，否则向上绿/向下红），方向 =
+  价格进入中枢前的最后一条线段方向，开关独立。
 - **特征序列包含高亮**：「特征序列」图层中，被包含合并“吃掉”的原始特征笔以黄色
   高亮并加圆点标记，直观展示算法如何处理包含关系（青色/粉色为未被合并的独立笔）。
 - **背驰标注**：
-  - 强背驰 = **趋背**（线段动量同向衰减），实心圆点；弱背驰 = **盘背**，空心圆环；
+  - 趋背 = 比较区间内 ≥2 个同向中枢；盘背 = 1 个中枢；
+  - 强/弱背驰（大级别动量是否同步衰减）用实心/空心圆点区分；
+  - 最后一笔未完成时显示灰色虚线圈 + 「预警」，不与已确认背驰同权；
   - 顶背驰 ▼ / 底背驰 ▲ 方向箭头 + 标签；
   - 当前笔与被比较笔之间用虚线连接，中点标注强度比（当前/前笔动量 %）；
   - 标签下方标注**面积数值** `A x · B y`（面积 = 单位强度 × 窗口K线数）。
@@ -174,20 +182,28 @@ node tests/run.js tests/segment-edge.test.js   # 单文件
 ```js
 chanlun.analyze(bars, {
   bi: { minGap: 4 },              // 笔内合并K线最小间隔
-  segment: { method: 'feature-sequence' },
+  segment: { method: 'feature-sequence', destroyOnBreach: false }, // 非标准扩展规则默认关
   center: { minElements: 3 },
   divergence: {
     macdFast: 12,                 // 动量度量 MACD 快线
     macdSlow: 26,                 // 慢线
     macdSignal: 9,                // 信号线
     minMomentumDrop: 0.9,         // 后笔动量 < 前同向笔 × 该值 → 局部背驰
-    requireCenter: true           // 两笔间需存在笔中枢（趋势背驰口径）
+    requireCenter: true,          // 两笔间需存在笔中枢（趋势背驰口径）
+    maxLookbackStrokes: 8         // 背驰最多向前回溯的笔数
   }
 })
 ```
 
 ## 行为变更（近期）
 
+- **线段破坏默认关闭**：`segment.destroyOnBreach` 改为默认 `false`（标准 67/71 课
+  特征序列规则）；可在 UI 勾选「线段破坏」或配置中显式开启。被破坏终结的线段
+  以黄色虚线绘制。
+- **笔端点定位**：合并K线新增 `hiIdx`/`loIdx`，分型端点取真实最高/最低价所在
+  原始K线，不再使用合并组中间下标。
+- **背驰回溯/类型**：新增 `divergence.maxLookbackStrokes`（默认 8 笔）；
+  `divergenceType` 用同向中枢数量区分趋背/盘背；未完成笔以灰色预警显示。
 - **背驰动量口径**：改为只累计同向 MACD 柱面积（与 `rangeMomentum` 统一），
   不再对方向定向的净面积取绝对值。逆势动量不再被当成强动量，信号数量会减少；
   同时动量为 0 的同向笔会被跳过，继续向前找有实际同向动量的同向笔。

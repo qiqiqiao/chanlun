@@ -59,7 +59,7 @@ const FIXTURES = {
       merged: 21,
       strokes: 3,
       strokeDirs: ['down', 'up', 'down'],
-      endpoints: [6, 12, 18, 24], // 各笔 fromRaw / 末笔 toRaw
+      endpoints: [5, 11, 17, 23], // 各笔 fromRaw / 末笔 toRaw（合并K线内真实极值下标）
       segments: 1,
       segmentDirs: ['down'],
       finishedSegments: 0,
@@ -68,16 +68,16 @@ const FIXTURES = {
     }
   },
   wave: {
-    meta: '五段趋势 + 区间 + 突破：多笔、笔中枢、突破破坏向下段后转向上开口段',
+    meta: '五段趋势 + 区间 + 突破：多笔、笔中枢、标准规则下的开口段',
     bars: barsFrom(buildWaveSeq()),
     expect: {
       raw: 99,
       merged: 72,
       fractals: 8,
       strokes: 7,
-      segments: 2,
-      finishedSegments: 1,
-      lastSegment: { dir: 'up', fromRaw: 38, toRaw: 87, finished: false },
+      segments: 1,
+      finishedSegments: 0,
+      lastSegment: { dir: 'down', fromRaw: 9, toRaw: 86, finished: false },
       strokeCenters: 2,
       segmentCenters: 0
     }
@@ -92,23 +92,23 @@ const FIXTURES = {
       strokes: 16,
       segments: 1,
       finishedSegments: 0,
-      lastSegment: { dir: 'up', fromRaw: 2, toRaw: 115, finished: false },
+      lastSegment: { dir: 'up', fromRaw: 1, toRaw: 114, finished: false },
       strokeCenters: 1,
       segmentCenters: 0
     }
   },
   random: {
-    meta: '确定性随机游走（seed 42）：含破坏终结线段与笔中枢/线段中枢',
+    meta: '确定性随机游走（seed 42）：标准特征序列规则下的多段结构',
     bars: randomWalk(300, 42),
     expect: {
       raw: 300,
       merged: 145,
       fractals: 18,
       strokes: 17,
-      segments: 4,
-      finishedSegments: 3,
+      segments: 2,
+      finishedSegments: 1,
       strokeCenters: 1,
-      segmentCenters: 1
+      segmentCenters: 0
     }
   }
 }

@@ -56,7 +56,10 @@ t('方向已知上涨包含：取高高低高', () => {
   const { merged } = c.mergeBars(bars)
   deepEqual(merged.length, 2, 'merged into 2')
   // rawMiddle 是原始K线索引：rawIndices=[1,2] 中间位 = rawIndices[1]=2
-  deepEqual(merged[1], { high: 120, low: 112, rawIndices: [1, 2], rawMiddle: 2, rawStart: 1, rawEnd: 2 })
+  deepEqual(merged[1], {
+    high: 120, low: 112, rawIndices: [1, 2], hiIdx: 1, loIdx: 2,
+    rawMiddle: 2, rawStart: 1, rawEnd: 2
+  })
 })
 
 // 4b. 方向已知下跌包含：取 低低高低
@@ -68,7 +71,10 @@ t('方向已知下跌包含：取低低高低', () => {
   ].map((b, i) => ({ timestamp: i, ...b }))
   const { merged } = c.mergeBars(bars)
   deepEqual(merged.length, 2, 'merged into 2')
-  deepEqual(merged[1], { high: 105, low: 96, rawIndices: [1, 2], rawMiddle: 2, rawStart: 1, rawEnd: 2 })
+  deepEqual(merged[1], {
+    high: 105, low: 96, rawIndices: [1, 2], hiIdx: 1, loIdx: 2,
+    rawMiddle: 2, rawStart: 1, rawEnd: 2
+  })
 })
 
 // 5. 方向未知的包含：保留更大区间
@@ -93,7 +99,10 @@ t('连续包含', () => {
   ].map((b, i) => ({ timestamp: i, ...b }))
   const { merged } = c.mergeBars(bars)
   deepEqual(merged.length, 2, 'two groups')
-  deepEqual(merged[0], { high: 108, low: 100, rawIndices: [0, 1], rawMiddle: 1, rawStart: 0, rawEnd: 1 })
+  deepEqual(merged[0], {
+    high: 108, low: 100, rawIndices: [0, 1], hiIdx: 0, loIdx: 0,
+    rawMiddle: 1, rawStart: 0, rawEnd: 1
+  })
 })
 
 // 7. 连续反向包含：方向确定后（向上），后续含根按向上合并
@@ -106,7 +115,10 @@ t('连续反向包含', () => {
   ].map((b, i) => ({ timestamp: i, ...b }))
   const { merged } = c.mergeBars(bars)
   deepEqual(merged.length, 2, 'two merged')
-  deepEqual(merged[1], { high: 110, low: 99, rawIndices: [1, 2], rawMiddle: 2, rawStart: 1, rawEnd: 2 })
+  deepEqual(merged[1], {
+    high: 110, low: 99, rawIndices: [1, 2], hiIdx: 1, loIdx: 2,
+    rawMiddle: 2, rawStart: 1, rawEnd: 2
+  })
 })
 
 // 8. 3 根连续包含（方向未定取更大），随后方向翻转
@@ -120,8 +132,14 @@ t('连续3根包含 + 方向翻转', () => {
   ].map((b, i) => ({ timestamp: i, ...b }))
   const { merged } = c.mergeBars(bars)
   deepEqual(merged.length, 2, '2 groups')
-  deepEqual(merged[0], { high: 120, low: 100, rawIndices: [0, 1, 2], rawMiddle: 1, rawStart: 0, rawEnd: 2 })
-  deepEqual(merged[1], { high: 130, low: 112, rawIndices: [3, 4], rawMiddle: 4, rawStart: 3, rawEnd: 4 })
+  deepEqual(merged[0], {
+    high: 120, low: 100, rawIndices: [0, 1, 2], hiIdx: 0, loIdx: 0,
+    rawMiddle: 1, rawStart: 0, rawEnd: 2
+  })
+  deepEqual(merged[1], {
+    high: 130, low: 112, rawIndices: [3, 4], hiIdx: 3, loIdx: 4,
+    rawMiddle: 4, rawStart: 3, rawEnd: 4
+  })
 })
 
 // 9. mergeBars / resumeMerge 增量一致性（随机）
@@ -148,10 +166,31 @@ t('resumeMerge 与 mergeBars 一致', () => {
   deepEqual(JSON.parse(JSON.stringify(merged)), JSON.parse(JSON.stringify(fullMerged)), 'merge identical')
 })
 
-// 10. normalizeConfig 默认值 + 旧参数兼容
+// 10. 极值下标：hiIdx / loIdx 必须指向真正贡献高/低点的原始K线
+t('合并K线记录真实极值下标（hiIdx/loIdx）', () => {
+  const rng = require('./helpers').makeRng(21)
+  const bars = []
+  let p = 100
+  for (let i = 0; i < 800; i++) {
+    const o = p
+    const cl = o + (rng() - 0.5) * 8
+    bars.push({ timestamp: i, open: o, high: Math.max(o, cl) + rng() * 3, low: Math.min(o, cl) - rng() * 3, close: cl })
+    p = cl
+  }
+  const { merged } = c.mergeBars(bars)
+  for (const m of merged) {
+    assert(bars[m.hiIdx].high === m.high, 'hiIdx 必须对应最高价')
+    assert(bars[m.loIdx].low === m.low, 'loIdx 必须对应最低价')
+    assert(m.rawIndices.includes(m.hiIdx) && m.rawIndices.includes(m.loIdx), '极值下标必须属于合并组')
+  }
+})
+
+// 11. normalizeConfig 默认值 + 旧参数兼容
 t('normalizeConfig 默认与兼容', () => {
   const d = c.normalizeConfig()
   deepEqual(d.bi.minGap, 4)
+  deepEqual(d.segment.destroyOnBreach, false, '非标准线段破坏规则默认关闭')
+  deepEqual(d.divergence.maxLookbackStrokes, 8, '背驰回溯上限默认 8 笔')
   const compat = c.normalizeConfig({ biMinGap: 7 })
   deepEqual(compat.bi.minGap, 7)
   const nested = c.normalizeConfig({ bi: { minGap: 3 } })

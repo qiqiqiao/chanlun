@@ -87,6 +87,27 @@ t('相邻同类型分型：后者更极端时替换前者', () => {
   assert(fx[1].type === 'bottom' && fx[1].mi === 3)
 })
 
+t('分型端点取极值所在原始K线（top=hiIdx / bottom=loIdx）', () => {
+  // 合并K线的 middle 是 1，但最高价来自下标 2；底分型的 middle=2，最低价来自下标 1
+  const topMerged = [
+    { high: 10, low: 4, rawMiddle: 0, hiIdx: 0, loIdx: 0 },
+    { high: 13, low: 7, rawMiddle: 1, hiIdx: 2, loIdx: 3 },
+    { high: 11, low: 5, rawMiddle: 4, hiIdx: 4, loIdx: 4 }
+  ]
+  const top = c.calcFractals(topMerged)
+  assert(top.length === 1 && top[0].type === 'top', 'top fractal')
+  assert(top[0].rawMiddle === 2, '顶分型 rawMiddle = hiIdx')
+
+  const bottomMerged = [
+    { high: 12, low: 6, rawMiddle: 0, hiIdx: 0, loIdx: 0 },
+    { high: 9, low: 3, rawMiddle: 2, hiIdx: 3, loIdx: 1 },
+    { high: 11, low: 5, rawMiddle: 4, hiIdx: 4, loIdx: 4 }
+  ]
+  const bottom = c.calcFractals(bottomMerged)
+  assert(bottom.length === 1 && bottom[0].type === 'bottom', 'bottom fractal')
+  assert(bottom[0].rawMiddle === 1, '底分型 rawMiddle = loIdx')
+})
+
 t('分型：createAnalyzer 增量与全量一致', () => {
   const rng = makeRng(11)
   const bars = []

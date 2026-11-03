@@ -7,6 +7,8 @@
  *   2. 大级别（线段级别）确认：后笔所在线段与其前一同向线段比较动量——
  *      大级别动量同步衰减 → 强背驰（confirmed，反转预警权重高）；
  *      大级别动量仍在扩张 → 弱背驰（更可能是中枢震荡/回调）。
+ *   3. 类型：比较区间内同向中枢 ≥2 → trend（趋背）；1 个 → consolidation（盘背）。
+ *      回溯距离受 maxLookbackStrokes 限制，避免跨多个结构远距离误配。
  *
  * 动量度量：MACD 柱面积的【单位K线强度】。EMA(12/26) → DIF，DEA=DIF 的 EMA(9)，
  * hist = 2*(DIF-DEA)；区间面积只累计与移动方向同向的柱（上行取正柱、下行取
@@ -237,6 +239,27 @@
     return ci !== -1 && idx.centerEnd[ci] >= j
   }
 
+  // 中枢方向：进入中枢前最后一笔的方向（与绘制层的 centerDirOf 同口径）。
+  // 中枢起点为 0 时没有“进入前”的笔，退回中枢首笔方向。
+  function centerIncomingDir(strokes, center) {
+    const prev = strokes[center.startIndex - 1]
+    if (prev) return prev.dir
+    const first = strokes[center.startIndex]
+    return first ? first.dir : null
+  }
+
+  // 两笔比较区间 [i, j] 内同向中枢数量：
+  //   缠论趋势背驰要求至少两个同向中枢（趋势），只有一个中枢属于盘整背驰。
+  // 中枢与比较区间相交即计入；方向按进入中枢的走势判定。
+  function countSameDirectionCenters(strokes, strokeCenters, i, j, dir) {
+    let count = 0
+    for (const c of strokeCenters) {
+      if (c.endIndex < i || c.startIndex > j) continue
+      if (centerIncomingDir(strokes, c) === dir) count++
+    }
+    return count
+  }
+
   /*
    * 笔背驰检测：
    *   对每根笔 j 向前找同向笔 i，满足：
@@ -264,11 +287,13 @@
       ? buildCenterIndex(strokeCenters, strokes.length)
       : null
     const out = []
+    const maxLookback = dcfg.maxLookbackStrokes > 0 ? dcfg.maxLookbackStrokes : Infinity
     for (let j = 2; j < strokes.length; j++) {
       const s = strokes[j]
       const up = s.dir === 'up'
       let prev = -1
-      for (let i = j - 2; i >= 0; i -= 2) {
+      const minI = Math.max(0, j - maxLookback)
+      for (let i = j - 2; i >= minI; i -= 2) {
         const p = strokes[i]
         const beyond = up ? s.toValue > p.toValue : s.toValue < p.toValue
         if (!beyond) break
@@ -292,18 +317,25 @@
         s.dir
       )
       const confirmed = bigLevel.aligned && bigLevel.fading === true
+      // 趋势背驰 vs 盘整背驰：同向中枢 ≥2 才是趋势背驰；1 个（或 requireCenter
+      // 关闭时 0 个）为盘整背驰。strong 仍表示大级别动量是否同步衰减，
+      // 两者是不同维度，不能再用 strength 冒充“趋背/盘背”。
+      const trendCenterCount = countSameDirectionCenters(strokes, strokeCenters, prev, j, s.dir)
       out.push({
         si: j,
         kind: up ? 'top' : 'bottom',
         dir: s.dir,
         prevSi: prev,
+        lookback: j - prev,
         rawIndex: s.toRaw,
         value: s.toValue,
         provisional: j === strokes.length - 1,
         momentum: { current: momCur, previous: momPrev, ratio },
         bigLevel,
         strength: confirmed ? 'strong' : 'weak',
-        confirmed
+        confirmed,
+        divergenceType: trendCenterCount >= 2 ? 'trend' : 'consolidation',
+        trendCenterCount
       })
     }
     return out

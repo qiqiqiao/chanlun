@@ -34,6 +34,10 @@ const sig = (r) => JSON.stringify({
   segs: r.segments.map((s) => s.dir + ':' + s.fromRaw + '-' + s.toRaw + (s.finished ? 'F' : 'O'))
 })
 
+// 这些回归用例的预期结构包含“线段破坏”扩展规则（参考实现按该规则镜像），
+// 而库默认已改为标准特征序列规则 → 显式开启扩展规则。
+const DESTROY = c.normalizeConfig({ segment: { destroyOnBreach: true } })
+
 // ---------------------------------------------------------------------------
 // 回归：旧版否定逻辑（concat pendingFeatures）导致线段终点漂移的用例
 // 预期值 = 教科书正确行为（否定时从触发笔之后完整重放）。
@@ -50,7 +54,7 @@ const REGRESSION = [
 t('回归：缺口分型被否定时线段终点不漂移（旧版 bug）', () => {
   for (const rc of REGRESSION) {
     const strokes = randStrokes(rc.n, rc.seed)
-    const r = c.segmentScan(strokes, 0)
+    const r = c.segmentScan(strokes, 0, DESTROY)
     assert.strictEqual(sig(r), sig({ confirmedSis: rc.sis, segments: rc.segs.map(parseSeg) }),
       'seed ' + rc.seed + ' 期望正确线段结构')
   }
@@ -167,7 +171,7 @@ t('回归：否定重放不丢交错笔（完整重放语义）', () => {
   // 锁定种子：与参考实现（进入 pending 时记录触发笔之后的位置）逐位一致
   for (const { seed, n } of [{ seed: 2, n: 80 }, { seed: 7, n: 80 }, { seed: 20, n: 40 }, { seed: 62, n: 80 }, { seed: 70, n: 80 }]) {
     const strokes = randStrokes(n, seed)
-    const r = c.segmentScan(strokes, 0)
+    const r = c.segmentScan(strokes, 0, DESTROY)
     // 参考实现：与 segmentScan 相同，仅否定分支的回退点固定为“触发笔之后”
     const refScan = (strokes2, segStart) => {
       const segments = []
@@ -285,7 +289,7 @@ t('破坏：向下段被反弹超越起点 → 旧段终结于破坏笔起点，
     mk(4, 'down', 32, 25),
     mk(5, 'up', 25, 28)
   ]
-  const r = c.segmentScan(strokes, 0)
+  const r = c.segmentScan(strokes, 0, DESTROY)
   assert.strictEqual(r.segments.length, 2)
   const d0 = r.segments[0]
   assert.strictEqual(d0.dir, 'down')
@@ -308,7 +312,7 @@ t('破坏：向上段被下跌超越起点 → 对称处理', () => {
     mk(3, 'down', 108, 95), // low 95 < 起点 100 → 破坏
     mk(4, 'up', 95, 99)
   ]
-  const r = c.segmentScan(strokes, 0)
+  const r = c.segmentScan(strokes, 0, DESTROY)
   assert.strictEqual(r.segments.length, 2)
   assert.strictEqual(r.segments[0].destroyed, true)
   assert.deepStrictEqual([r.segments[0].fromRaw, r.segments[0].toRaw], [0, 15])
