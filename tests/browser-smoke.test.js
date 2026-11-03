@@ -164,6 +164,108 @@ t('createMacd：CHAN_DIV 必须以 isStack=true 附加，不得删掉 MACD（kli
   assert(divCreate && /stack=true/.test(divCreate), 'CHAN_DIV 必须 isStack=true，实际: ' + JSON.stringify(log))
 })
 
+t('恢复持久化指标开关：初始图表与重建视图都不得创建已关闭的 VOL/MACD', () => {
+  const sb = runBrowser(CORE_FILES)
+  const created = []
+  const chart = {
+    setStyles() {},
+    setSymbol() {},
+    setPeriod() {},
+    setDataLoader() {},
+    getDataList() { return [] },
+    getIndicators() { return [] },
+    removeIndicator() {},
+    createIndicator(value) {
+      const name = typeof value === 'string' ? value : value.name
+      created.push(name)
+      return name + '_id'
+    }
+  }
+  const klinechartsStub = {
+    init: () => chart,
+    dispose() {},
+    registerIndicator() {}
+  }
+  sb.klinecharts = klinechartsStub
+  sb.__CHANLUN_TEST__ = true
+  const fakeEl = {
+    addEventListener() {}, classList: { toggle() {} }, textContent: '', value: '', querySelectorAll: () => []
+  }
+  sb.document = {
+    readyState: 'loading',
+    addEventListener() {},
+    querySelector: () => fakeEl,
+    querySelectorAll: () => [],
+    createElement: () => ({
+      getContext: () => ({
+        beginPath() {}, moveTo() {}, arcTo() {}, closePath() {}, fill() {}, fillText() {},
+        set fillStyle(v) {}, set font(v) {}, set textAlign(v) {}, set textBaseline(v) {}
+      }),
+      width: 0, height: 0, toDataURL: () => ''
+    }),
+    head: { appendChild() {} }
+  }
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), sb, { filename: 'main.js' })
+
+  // 模拟 loadPersistedState 恢复出的关闭状态
+  sb.__chanlunChart.state.indOptions.volume = false
+  sb.__chanlunChart.state.indOptions.macd = false
+  sb.__chanlunChart.initCharts()
+  assert(!created.includes('VOL'), '恢复 volume=false 后不得创建 VOL: ' + created.join(','))
+  assert(!created.includes('MACD'), '恢复 macd=false 后不得创建 MACD: ' + created.join(','))
+  assert(!created.includes('CHAN_DIV'), 'MACD 关闭时不得创建 CHAN_DIV')
+  assert.strictEqual(sb.__chanlunChart.mainView.indOptions.volume, false)
+  assert.strictEqual(sb.__chanlunChart.mainView.indOptions.macd, false)
+
+  // 切换交易所会走 initCharts 重建，仍应尊重关闭状态
+  created.length = 0
+  sb.__chanlunChart.initCharts()
+  assert(!created.includes('VOL') && !created.includes('MACD'), '重建视图不得重新打开已关闭指标')
+
+  // 重新打开只创建一次，并同步 view.indOptions
+  created.length = 0
+  sb.__chanlunChart.toggleIndicator('volume', true)
+  sb.__chanlunChart.toggleIndicator('volume', true) // 重复开启（异常调用）不得叠出第二个 VOL
+  assert.strictEqual(sb.__chanlunChart.mainView.indOptions.volume, true)
+  assert.strictEqual(created.filter((n) => n === 'VOL').length, 1, 'VOL 不得重复创建: ' + created.join(','))
+})
+
+t('交易所订阅的 WebSocket 参数：OKX 心跳 / Binance 更宽静默阈值', () => {
+  const sb = runBrowser(CORE_FILES)
+  const calls = []
+  sb.dataLayer.createReconnectingSocket = (url, handlers, opts) => {
+    calls.push({ url, handlers, opts })
+    return { close() {} }
+  }
+  const klinechartsStub = {
+    init: () => ({ setStyles() {}, setSymbol() {}, setPeriod() {}, setDataLoader() {}, getDataList: () => [] }),
+    dispose() {},
+    registerIndicator() {}
+  }
+  sb.klinecharts = klinechartsStub
+  sb.__CHANLUN_TEST__ = true
+  const fakeEl = {
+    addEventListener() {}, classList: { toggle() {} }, textContent: '', value: '', querySelectorAll: () => []
+  }
+  sb.document = {
+    readyState: 'loading',
+    addEventListener() {},
+    querySelector: () => fakeEl,
+    querySelectorAll: () => [],
+    createElement: () => ({ getContext: () => ({}), width: 0, height: 0, toDataURL: () => '' }),
+    head: { appendChild() {} }
+  }
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), sb, { filename: 'main.js' })
+
+  sb.__chanlunChart.exchangers.okx.subscribe('BTCUSDT', { type: 'minute', span: 1 }, () => {})
+  sb.__chanlunChart.exchangers.binance.subscribe('BTCUSDT', { type: 'minute', span: 1 }, () => {})
+  assert.strictEqual(calls.length, 2)
+  assert.strictEqual(calls[0].opts.heartbeatInterval, 25000, 'OKX 每 25s 发心跳')
+  assert.strictEqual(calls[0].opts.heartbeatMessage, 'ping', 'OKX 心跳内容为 ping')
+  assert.strictEqual(calls[1].opts.idleTimeoutMs, 180000, 'Binance 冷门交易对放宽到 3 分钟')
+  assert.strictEqual(calls[1].opts.heartbeatInterval, undefined, 'Binance 不需要应用层心跳')
+})
+
 t('index.html 脚本清单可全部加载（除 CDN 与 main.js 的 DOM 依赖）', () => {
   // 按 index.html 的顺序加载核心脚本，确保没有依赖顺序错误
   const sb = runBrowser(CORE_FILES)

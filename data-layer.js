@@ -7,6 +7,8 @@
  *                                 键数上限（LRU 淘汰）
  *   - createRetryFetch()          指数退避 + 随机抖动重试；错误可分类（可重试/不可重试）
  *   - createReconnectingSocket()  WebSocket 自动重连（指数退避 + 抖动）；
+ *                                 静默看门狗（idleTimeoutMs 内无报文 → 主动 close 重连）；
+ *                                 可选应用层心跳（heartbeatInterval/heartbeatMessage）；
  *                                 close() 为主动关闭（订阅端解绑），不再重连
  *   - createKlineLoader()         klinecharts v10 setDataLoader 适配：
  *                                 init/forward/backward 分页 + 实时订阅，统一走缓存
@@ -115,14 +117,90 @@
     const baseDelay = opts.baseDelay || 1000
     const maxDelay = opts.maxDelay || 15000
     const jitter = opts.jitter !== false
+    // 静默断线看门狗：连接打开后超过 idleTimeoutMs 没收到任何报文 → 主动 close，
+    // 由现有 onclose 重连 + REST 回补流程恢复（休眠唤醒/网络切换后常不发 close）。
+    const idleTimeoutMs = opts.idleTimeoutMs === undefined ? 60000 : opts.idleTimeoutMs
+    // 应用层心跳（OKX 公共频道需客户端每 25s 发送字符串 "ping" 保活）
+    const heartbeatInterval = opts.heartbeatInterval || 0
+    const heartbeatMessage = opts.heartbeatMessage
+    const setTimer = opts.setTimer || ((delay, fn) => setTimeout(fn, delay))
+    const clearTimer = opts.clearTimer || ((t) => clearTimeout(t))
 
     let ws = null
     let closed = false
     let retries = 0
     let timer = null
+    let idleTimer = null
+    let heartbeatTimer = null
     let hasOpened = false // 区分首次连接与重连（重连需要补拉断线期间的K线）
     let paused = false // 回补期间缓冲实时消息，避免较新的消息把回补的旧K线挡掉
     let pending = []
+
+    function unref(t) {
+      if (t && typeof t.unref === 'function') t.unref()
+    }
+
+    function clearIdle() {
+      if (idleTimer) {
+        clearTimer(idleTimer)
+        idleTimer = null
+      }
+    }
+
+    function clearHeartbeat() {
+      if (heartbeatTimer) {
+        clearTimer(heartbeatTimer)
+        heartbeatTimer = null
+      }
+    }
+
+    function stopSocketTimers() {
+      clearIdle()
+      clearHeartbeat()
+    }
+
+    // 计算退避并调度下一次连接；onclose 与静默看门狗共用。
+    function scheduleReconnect() {
+      let delay = Math.min(baseDelay * 2 ** retries, maxDelay)
+      if (jitter) delay *= 0.8 + Math.random() * 0.4
+      retries++
+      timer = schedule(delay, connect)
+    }
+
+    function armIdleWatchdog(socket) {
+      clearIdle()
+      if (!(idleTimeoutMs > 0)) return
+      idleTimer = setTimer(idleTimeoutMs, () => {
+        idleTimer = null
+        if (closed || socket !== ws) return
+        // 半开连接上 close() 的 onclose 可能很晚才到（甚至永不到达），
+        // 因此这里不能依赖 onclose：立即让旧 socket 失效并直接调度重连。
+        stopSocketTimers()
+        ws = null
+        socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null
+        try { socket.close() } catch (e) { /* noop */ }
+        scheduleReconnect()
+      })
+      unref(idleTimer)
+    }
+
+    function startHeartbeat(socket) {
+      clearHeartbeat()
+      if (!(heartbeatInterval > 0) || heartbeatMessage === undefined) return
+      heartbeatTimer = setTimer(heartbeatInterval, () => {
+        heartbeatTimer = null
+        if (closed || socket !== ws) return
+        try {
+          socket.send(typeof heartbeatMessage === 'function' ? heartbeatMessage() : heartbeatMessage)
+        } catch (e) {
+          // 发送失败通常意味着连接已不可用：主动关闭以触发重连
+          try { socket.close() } catch (err) { /* noop */ }
+          return
+        }
+        startHeartbeat(socket)
+      })
+      unref(heartbeatTimer)
+    }
 
     // onOpen 里通常会发订阅消息（OKX）。socket 可能仍在 CONNECTING（例如回补期间
     // 又断线重连），send 会抛 InvalidStateError；订阅失败由后续重连自愈，这里吞掉。
@@ -141,6 +219,8 @@
     // 自己走回补/订阅，避免对陈旧或尚未 OPEN 的 socket 发消息。
     function resume(socket) {
       if (closed || socket !== ws) return
+      // 回补可能耗时较长，重新起算静默窗口，避免刚恢复就被看门狗判定超时
+      armIdleWatchdog(socket)
       safeOpen(socket)
       const msgs = pending
       pending = []
@@ -150,10 +230,13 @@
 
     function connect() {
       if (closed) return
+      stopSocketTimers()
       const sock = connectImpl(url)
       ws = sock
       sock.onopen = () => {
         retries = 0
+        armIdleWatchdog(sock)
+        startHeartbeat(sock)
         if (!hasOpened) {
           hasOpened = true
           safeOpen(sock)
@@ -173,6 +256,8 @@
       sock.onerror = () => { /* 统一交给 onclose 处理重连 */ }
       sock.onmessage = (ev) => {
         if (sock !== ws) return // 已被新连接取代，丢弃旧 socket 的消息
+        // 任何报文（含 OKX 的纯文本 "pong"、解析失败的消息）都证明连接仍活着
+        armIdleWatchdog(sock)
         let m
         try {
           m = JSON.parse(ev.data)
@@ -184,10 +269,9 @@
       }
       sock.onclose = () => {
         if (closed || sock !== ws) return
-        let delay = Math.min(baseDelay * 2 ** retries, maxDelay)
-        if (jitter) delay *= 0.8 + Math.random() * 0.4
-        retries++
-        timer = schedule(delay, connect)
+        stopSocketTimers()
+        ws = null
+        scheduleReconnect()
       }
     }
 
@@ -198,6 +282,7 @@
         closed = true
         paused = false
         pending = []
+        stopSocketTimers()
         if (timer) clear(timer)
         if (ws) {
           try { ws.close() } catch (e) { /* noop */ }

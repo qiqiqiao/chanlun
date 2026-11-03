@@ -241,9 +241,10 @@
     return retryFetch(() => fetchJsonOnce(url, timeoutMs))
   }
 
-  // WebSocket 自动重连由 data-layer.js 提供（指数退避 + 抖动；close 后不再重连）
-  const createReconnectingSocket = (url, onMessage, onOpen, onReconnect) =>
-    window.dataLayer.createReconnectingSocket(url, { onMessage, onOpen, onReconnect })
+  // WebSocket 自动重连由 data-layer.js 提供（指数退避 + 抖动；close 后不再重连）。
+  // extra 用于交易所特有参数（如 OKX 应用层心跳）。
+  const createReconnectingSocket = (url, onMessage, onOpen, onReconnect, extra) =>
+    window.dataLayer.createReconnectingSocket(url, { onMessage, onOpen, onReconnect }, extra)
 
   const exchangers = {
     binance: {
@@ -295,7 +296,10 @@
             }
           },
           undefined,
-          opts && opts.onReconnect
+          opts && opts.onReconnect,
+          // Binance kline 流在冷门交易对无成交时可能长时间无推送；阈值放宽到
+          // 3 分钟，避免把正常静默误判成半开连接后每分钟重连 + REST 回补。
+          { idleTimeoutMs: 180000 }
         )
       }
     },
@@ -371,7 +375,10 @@
               })
             )
           },
-          opts && opts.onReconnect
+          opts && opts.onReconnect,
+          // OKX 公共频道 30s 无数据会断开：每 25s 发送字符串 "ping" 保活，
+          // 服务端回 "pong"（非 JSON，onmessage 仍会重置静默看门狗）。
+          { heartbeatInterval: 25000, heartbeatMessage: 'ping' }
         )
       }
     }
@@ -1044,7 +1051,9 @@
       period: state.period,
       chanState: null,
       chanOptions: { ...state.chanOptions },
-      indOptions: { volume: true, macd: true },
+      // 必须恢复持久化后的指标开关；写死 true 会导致刷新/切换交易所后
+      // 已关闭的 VOL/MACD 又被创建，复选框状态与图表不一致。
+      indOptions: { ...state.indOptions },
       chart: null,
       updater: createUpdater(),
       volId: null,
@@ -1065,6 +1074,7 @@
     view = view || ensureView()
     const ch = view.chart
     if (!ch) return
+    if (view.macdId && ch.getIndicators && ch.getIndicators({ id: view.macdId }).length) return
     view.macdId = ch.createIndicator({ name: 'MACD', calcParams: MACD_PARAMS.slice() })
     // 把「背驰面积」指标附加到 MACD 所在的 pane（失败则静默降级，不影响主图）
     try {
@@ -1109,9 +1119,14 @@
     saveState()
     const view = mainView
     if (!view || !view.chart) return
+    // view.indOptions 必须与 state 同步，否则重建视图/重复点击会按旧状态叠加指标
+    view.indOptions[key] = on
     if (on) {
-      if (key === 'volume') view.volId = view.chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20] })
-      else if (key === 'macd') createMacd(view)
+      if (key === 'volume') {
+        if (!view.volId) view.volId = view.chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20] })
+      } else if (key === 'macd') {
+        if (!view.macdId) createMacd(view)
+      }
     } else {
       if (key === 'volume' && view.volId) {
         view.chart.removeIndicator({ id: view.volId })

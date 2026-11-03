@@ -135,6 +135,7 @@ Implements the feature-sequence method as described in Lessons 67/71 of the orig
 - **Caching**: per `(exchange, symbol, period)` with dedup/ascending normalization and LRU eviction.
 - **Init catch-up**: re-includes the last cached bar (`afterOf(lastTs - 1)`) so a bar cached while still open receives its final value. If more than one page is missing, it loops until caught up; a detected gap (exchange returns only the newest page) reloads the cache instead of leaving a time hole.
 - **WebSocket reconnect**: after a reconnect, message delivery is paused, missed bars are backfilled over REST (paging backward from the newest page until the chart's last bar is covered), then the subscription is re-established and buffered messages are replayed. Stale backfills from superseded sockets are discarded.
+- **Silent-disconnect watchdog / heartbeat**: a socket that receives no message for `idleTimeoutMs` invalidates itself and schedules a reconnect immediately — it does not wait for the possibly-delayed `onclose`. The default is 60s; Binance uses 180s because illiquid kline streams may legitimately stay quiet, while OKX public subscriptions send an application-level `"ping"` every 25s to keep the channel alive. Any incoming message (including a non-JSON `"pong"`) resets the watchdog.
 
 ## Visualization Highlights
 

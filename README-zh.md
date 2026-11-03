@@ -211,6 +211,14 @@ chanlun.analyze(bars, {
   等价，故只保留原 `strict` 口径。
 - **重连回补**：WebSocket 重连后会通过 REST 补拉断线期间的K线；回补期间再次
   断线时，陈旧回补会作废，由最新连接自行回补/订阅。
+- **静默断线看门狗**：连接打开后超过 `idleTimeoutMs` 未收到任何报文就立即让
+  旧 socket 失效并直接调度重连，不等待可能迟迟不触发的 `onclose`；休眠唤醒/
+  网络切换不再停在旧价格。默认 60s，Binance 使用 180s（冷门 kline 流可能长时间
+  无成交推送），OKX 公共频道另有心跳。
+- **OKX 心跳**：公共频道每 25s 发送字符串 `"ping"` 保活；收到任意报文（包括
+  非 JSON 的 `"pong"`）都会重置看门狗。
+- **持久化指标开关**：`createChartView` 使用 `state.indOptions` 初始化，刷新或
+  切换交易所后不会把已关闭的 VOL/MACD 重新打开。
 - **OKX `isBarClosed`**：改用 candles 频道的 `confirm` 字段，不再恒为 `false`。
 - **数据层修正**：init 复用缓存时重新包含末根（刷新其终值），并在离线较久时
   循环补齐或（缺口过大时）重载，避免末根陈旧/时间断层。

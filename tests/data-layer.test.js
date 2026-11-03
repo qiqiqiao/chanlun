@@ -105,10 +105,14 @@ function FakeWs() {
   this.onclose = null
   this.onerror = null
   this.closed = false
+  this.sent = []
 }
 FakeWs.prototype.close = function () {
   this.closed = true
   if (this.onclose) this.onclose()
+}
+FakeWs.prototype.send = function (msg) {
+  this.sent.push(msg)
 }
 
 t('WS：断线自动重连（退避）且 close() 后不再重连', () => {
@@ -256,6 +260,79 @@ t('WS：onmessage 解析 JSON 并分发', () => {
   fake.onmessage({ data: '{"a":1}' })
   fake.onmessage({ data: 'not-json' }) // 忽略解析失败
   assert.deepStrictEqual(received, [{ a: 1 }])
+})
+
+t('WS：半开连接 onclose 永不触发时，看门狗直接调度重连', () => {
+  const sockets = []
+  const scheduled = []
+  const timers = []
+  dl.createReconnectingSocket('wss://x', {}, {
+    connect: () => { const w = new FakeWs(); sockets.push(w); return w },
+    schedule: (delay, fn) => { scheduled.push({ delay, fn }); return {} },
+    clear: () => {},
+    setTimer: (delay, fn) => { const t = { delay, fn }; timers.push(t); return t },
+    clearTimer: () => {},
+    idleTimeoutMs: 30000,
+    heartbeatInterval: 0,
+    jitter: false
+  })
+  assert.strictEqual(timers.length, 0, '连接打开前不启动看门狗')
+  sockets[0].onopen()
+  assert.strictEqual(timers.length, 1)
+  assert.strictEqual(timers[0].delay, 30000, '按 idleTimeoutMs 计时')
+
+  // 半开连接：close() 不触发 onclose（真实浏览器可能等关闭握手超时）
+  const lateOnclose = sockets[0].onclose
+  sockets[0].close = function () { this.closed = true }
+  timers[0].fn() // 模拟 30s 没收到任何报文；close() 不触发 onclose
+  assert.strictEqual(sockets[0].closed, true, '看门狗必须主动关闭静默连接')
+  assert.strictEqual(scheduled.length, 1, '不得等待 onclose，必须直接调度重连')
+  scheduled[0].fn()
+  assert.strictEqual(sockets.length, 2, '看门狗调度后必须真正建立新连接')
+  if (lateOnclose) lateOnclose()
+  assert.strictEqual(scheduled.length, 1, '迟到的 onclose 不得重复调度重连')
+})
+
+t('WS：任何报文都会重置静默看门狗（含非 JSON 的 pong）', () => {
+  const sockets = []
+  const timers = []
+  const cleared = []
+  dl.createReconnectingSocket('wss://x', {}, {
+    connect: () => { const w = new FakeWs(); sockets.push(w); return w },
+    schedule: () => ({}),
+    clear: () => {},
+    setTimer: (delay, fn) => { const t = { delay, fn }; timers.push(t); return t },
+    clearTimer: (t) => { cleared.push(t) },
+    idleTimeoutMs: 30000,
+    heartbeatInterval: 0
+  })
+  sockets[0].onopen()
+  const first = timers[0]
+  sockets[0].onmessage({ data: 'pong' }) // OKX 心跳响应：非 JSON，但证明连接活着
+  assert(cleared.includes(first), '旧看门狗被清除')
+  assert.strictEqual(timers.length, 2, '收到报文后重新计时')
+  assert.strictEqual(sockets[0].closed, false)
+})
+
+t('WS：应用层心跳按间隔发送（OKX ping）', () => {
+  const sockets = []
+  const timers = []
+  dl.createReconnectingSocket('wss://x', {}, {
+    connect: () => { const w = new FakeWs(); sockets.push(w); return w },
+    schedule: () => ({}),
+    clear: () => {},
+    setTimer: (delay, fn) => { const t = { delay, fn }; timers.push(t); return t },
+    clearTimer: () => {},
+    idleTimeoutMs: 0, // 本用例只观察心跳
+    heartbeatInterval: 25000,
+    heartbeatMessage: 'ping'
+  })
+  sockets[0].onopen()
+  assert.strictEqual(timers.length, 1)
+  assert.strictEqual(timers[0].delay, 25000)
+  timers[0].fn()
+  assert.deepStrictEqual(sockets[0].sent, ['ping'], '到点发送 ping')
+  assert.strictEqual(timers.length, 2, '发送后继续调度下一次心跳')
 })
 
 // ---------------------------------------------------------------------------
