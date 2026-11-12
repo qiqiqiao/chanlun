@@ -464,31 +464,38 @@
     }
     const r = view.updater.update(dataList)
     view.chanState = r.state
-    updateStatus()
+    // skip 表示长度与末根内容都没变，缠论状态和状态栏文本必然不变；
+    // 缩放/平移触发的指标重算会走到这里，省掉每帧的 filter + 拼串 + DOM 写入。
+    if (r.action !== 'skip') updateStatus()
     return zeroResultFor(view, n)
   }
 
+  let lastStatusText = null
   function updateStatus() {
     const el = $('#status')
     if (!el) return
     const chanState = mainView ? mainView.chanState : null
-    if (!chanState) {
-      el.textContent = ''
-      return
+    let text = ''
+    if (chanState) {
+      const finished = chanState.segments.filter((s) => s.finished).length
+      const divs = chanState.divergences || []
+      const strongDivs = divs.filter((d) => d.confirmed).length
+      text =
+        state.symbol +
+        ' · ' + currentExchange().label +
+        // chanState.fractals 实际是笔端点（过滤后的有效分型序列），不是全部分型
+        ' | 笔端点 ' + chanState.fractals.length +
+        ' · 笔 ' + chanState.strokes.length +
+        ' · 线段 ' + finished + '+' + (chanState.segments.length - finished) +
+        ' · 线段中枢 ' + chanState.segmentCenters.length +
+        ' · 笔中枢 ' + chanState.strokeCenters.length +
+        ' · 背驰 ' + strongDivs + '/' + divs.length
     }
-    const finished = chanState.segments.filter((s) => s.finished).length
-    const divs = chanState.divergences || []
-    const strongDivs = divs.filter((d) => d.confirmed).length
-    el.textContent =
-      state.symbol +
-      ' · ' + currentExchange().label +
-      // chanState.fractals 实际是笔端点（过滤后的有效分型序列），不是全部分型
-      ' | 笔端点 ' + chanState.fractals.length +
-      ' · 笔 ' + chanState.strokes.length +
-      ' · 线段 ' + finished + '+' + (chanState.segments.length - finished) +
-      ' · 线段中枢 ' + chanState.segmentCenters.length +
-      ' · 笔中枢 ' + chanState.strokeCenters.length +
-      ' · 背驰 ' + strongDivs + '/' + divs.length
+    // 文本未变就不碰 DOM：footer 带 aria-live，重复写入会反复触发辅助技术播报
+    if (text !== lastStatusText) {
+      el.textContent = text
+      lastStatusText = text
+    }
   }
 
   // opts: { label?: 框内左上角文字, dashed?: 虚线边框（笔中枢） }

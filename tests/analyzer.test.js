@@ -56,6 +56,88 @@ t('updateLast 与 update 混合（回退重放 + 增量）仍与全量一致', (
   }
 })
 
+t('仅末根收盘价变化（merged 不变）时尾部刷新与全量逐字段一致', () => {
+  // 实时行情最常见的 tick：只改 close，high/low 不变 → 包含关系/分型/笔/线段/
+  // 中枢全都不动，只有 MACD 柱尾部变化。此时走背驰上下文尾部刷新快路径，
+  // 每个 tick 仍必须与 analyze(全部数据) 逐字段一致。
+  for (const seed of [7, 42, 1234]) {
+    const bars = randomWalk(400, seed)
+    const cfg = { biMinGap: 4 }
+    const a = c.createAnalyzer(cfg)
+    const ref = bars.slice()
+    a.update(ref)
+    const last0 = ref[ref.length - 1]
+
+    for (let k = 1; k <= 60; k++) {
+      const mutated = Object.assign({}, last0, { close: last0.close + ((k % 7) - 3) * 0.01 })
+      a.updateLast(mutated)
+      ref[ref.length - 1] = mutated
+      assert.deepStrictEqual(a.state, c.analyze(ref, cfg), 'close-only seed ' + seed + ' tick ' + k)
+    }
+
+    // 穿插一次改 high（结构变化 → 重建上下文），之后再连续只改 close
+    const bumped = Object.assign({}, ref[ref.length - 1], { high: last0.high + 3 })
+    a.updateLast(bumped)
+    ref[ref.length - 1] = bumped
+    assert.deepStrictEqual(a.state, c.analyze(ref, cfg), 'high bump seed ' + seed)
+    for (let k = 1; k <= 20; k++) {
+      const mutated = Object.assign({}, bumped, { close: bumped.close + k * 0.01 })
+      a.updateLast(mutated)
+      ref[ref.length - 1] = mutated
+      assert.deepStrictEqual(a.state, c.analyze(ref, cfg), 'post-bump seed ' + seed + ' tick ' + k)
+    }
+    assert(a.state.divergences.length > 0, '数据应产生背驰事件，确保快路径真正被覆盖')
+  }
+})
+
+t('尾部刷新 / 结构重算 / 追加随机交替，始终与全量一致', () => {
+  // divCtx 只在结构变化时重建。这里让三类操作随机交错，专门盯住
+  // 「刷新 → 重建 → 再刷新」的状态衔接，每个 tick 与全量重算逐字段比对。
+  const cfg = { biMinGap: 4 }
+  for (const seed of [11, 29]) {
+    const ref = randomWalk(600, seed)
+    const a = c.createAnalyzer(cfg)
+    a.update(ref)
+    let s = seed
+    const rnd = () => {
+      s = (s * 1103515245 + 12345) & 0x7fffffff
+      return s / 0x7fffffff
+    }
+    for (let k = 0; k < 200; k++) {
+      const roll = rnd()
+      const last = ref[ref.length - 1]
+      if (roll < 0.55) {
+        // 只改 close → 尾部刷新快路径
+        const b = Object.assign({}, last, { close: last.close + (rnd() - 0.5) * 0.5 })
+        a.updateLast(b)
+        ref[ref.length - 1] = b
+      } else if (roll < 0.8) {
+        // 改 high/low → 结构重算，divCtx 必须重建
+        const b = Object.assign({}, last, {
+          high: last.high + rnd() * 2,
+          low: last.low - rnd() * 2,
+          close: last.close + (rnd() - 0.5)
+        })
+        a.updateLast(b)
+        ref[ref.length - 1] = b
+      } else {
+        // 追加新 K → 全量尾部重扫
+        const b = {
+          timestamp: last.timestamp + 60000,
+          open: last.close,
+          high: last.close + 1 + rnd(),
+          low: last.close - 1 - rnd(),
+          close: last.close + (rnd() - 0.5),
+          volume: 100
+        }
+        a.update([b])
+        ref.push(b)
+      }
+      assert.deepStrictEqual(a.state, c.analyze(ref, cfg), 'seed ' + seed + ' step ' + k)
+    }
+  }
+})
+
 t('reset 后可重新初始化', () => {
   const bars = randomWalk(100, 21)
   const a = c.createAnalyzer({ biMinGap: 4 })

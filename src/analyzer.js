@@ -26,7 +26,10 @@
     const { createStrokeMachine } = core.stroke
     const { calcSegmentsFull } = core.segment
     const { calcCenters } = core.center
-    const { calcDivergences, macdHistogramState, macdStep } = core.divergence
+    const {
+      macdHistogramState, macdStep,
+      createDivergenceContext, calcDivergencesWithContext, refreshDivergenceTail
+    } = core.divergence
 
     function createAnalyzer(config) {
       const cfg = normalizeConfig(config)
@@ -49,6 +52,7 @@
       let strokeCenters = []
       let segmentCenters = []
       let divergences = []
+      let divCtx = null // 背驰上下文：结构未变时复用，只刷新尾部（实时热路径）
       let dataLen = 0
       let prevFilteredFxs = [] // 上轮重建后的过滤分型流（计算公共前缀）
       const fxFracEq = (a, b) => a.mi === b.mi && a.type === b.type
@@ -84,6 +88,7 @@
         strokeCenters = []
         segmentCenters = []
         divergences = []
+        divCtx = null
         dataLen = 0
         prevFilteredFxs = []
       }
@@ -137,17 +142,12 @@
 
       // 笔背驰依赖笔+线段+笔中枢+原始收盘价，随上游全量重算（纯函数 O(n)）
       // hists 已增量维护好，动量缓存复用未变化窗口，避免每 tick 重算整段。
+      // 结构变化时必须重建 divCtx（它持有 strokes/merged/hists 引用与预计算动量）。
       function recalcDivergences() {
-        divergences = calcDivergences(
-          strokes(),
-          segments,
-          strokeCenters,
-          merged,
-          closes,
-          cfg,
-          hists,
-          momCache
+        divCtx = createDivergenceContext(
+          strokes(), segments, strokeCenters, merged, closes, cfg, hists, momCache
         )
+        divergences = calcDivergencesWithContext(divCtx)
         // 动量缓存已同步到当前 hists，重置脏区间
         momCache.dirtyFrom = Infinity
       }
@@ -310,8 +310,15 @@
         if (!mergedUnchanged) {
           recomputeTail(merged.length - 2)
         } else if (oldClose !== newLastBar.close) {
-          // merged 未变但原始收盘价变了：只有背驰 MACD 依赖收盘价，单独重算
-          recalcDivergences()
+          // merged 未变但原始收盘价变了：笔/线段/中枢结构完全没动，只有 MACD
+          // 柱尾部变化。复用持久化的 divCtx，只刷新受影响窗口的动量与尾部背驰
+          // 事件；上下文尚未建立时退回全量重算。
+          if (divCtx) {
+            divergences = refreshDivergenceTail(divCtx, divergences, momCache.dirtyFrom)
+            momCache.dirtyFrom = Infinity
+          } else {
+            recalcDivergences()
+          }
         }
         return computeResult()
       }

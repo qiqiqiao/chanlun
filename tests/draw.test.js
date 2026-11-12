@@ -26,13 +26,17 @@ function loadApp() {
   sb.WebSocket = class { constructor() { throw new Error('no real WS') } }
   sb.setTimeout = (fn) => { fn(); return 0 }
   sb.clearTimeout = () => {}
+  const statusWrites = []
   const fakeEl = {
     addEventListener() {},
     classList: { toggle() {} },
-    textContent: '',
+    _textContent: '',
+    get textContent() { return this._textContent },
+    set textContent(v) { this._textContent = v; statusWrites.push(v) },
     value: '',
     querySelectorAll: () => []
   }
+  sb.__statusWrites = statusWrites
   sb.document = {
     readyState: 'loading',
     addEventListener() {},
@@ -49,6 +53,37 @@ function loadApp() {
 function center(startRaw, endRaw) {
   return { startRaw, endRaw, zsLow: 90, zsHigh: 110 }
 }
+
+t('状态栏：skip / 文本未变时不重复写 aria-live DOM', () => {
+  const app = loadApp()
+  const writes = app.__statusWrites
+  const bars = randomWalk(300, 7)
+  writes.length = 0
+
+  app.__chanlunChart.runChanCalc(bars) // init
+  assert.strictEqual(writes.length, 1, '首次计算写入一次状态栏')
+  assert(writes[0] && writes[0].length > 0)
+
+  app.__chanlunChart.runChanCalc(bars) // 完全相同 → skip
+  assert.strictEqual(writes.length, 1, 'skip 不应触碰 DOM')
+
+  const bars2 = bars.slice()
+  const last = bars2[bars2.length - 1]
+  bars2[bars2.length - 1] = Object.assign({}, last, { close: last.close + 0.25 })
+  app.__chanlunChart.runChanCalc(bars2) // replaceLast，但计数文本未变
+  assert.strictEqual(writes.length, 1, '文本未变不应重复写 DOM')
+
+  // 文本确实变化时仍必须写入（防止 diff 把该写的也吞掉）
+  app.__chanlunChart.state.symbol = 'ETHUSDT'
+  const bars3 = bars2.concat([{
+    timestamp: last.timestamp + 60000,
+    open: last.close, high: last.close + 1, low: last.close - 1,
+    close: last.close + 0.5, volume: 1
+  }])
+  app.__chanlunChart.runChanCalc(bars3)
+  assert.strictEqual(writes.length, 2, '文本变化时必须写入')
+  assert(writes[1].indexOf('ETHUSDT') >= 0)
+})
 
 t('visibleInRange：横跨左边界的中枢必须返回（旧版漏画回归）', () => {
   const app = loadApp()

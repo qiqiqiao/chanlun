@@ -205,14 +205,22 @@
   //   cover[i] = 覆盖笔下标 i 的中枢下标（-1 = 无；中枢互不重叠，至多一个）
   //   centerStart 升序、centerEnd 对齐 → “起点位于 (i, j)” 用二分 O(log m)，
   //   “单一中枢覆盖 [i, j]” 用 cover O(1)。
+  //   prefixUp/prefixDown 为「进入方向」前缀计数，供同向中枢计数 O(log m) 查询。
   // 与旧实现 strokeCenters.some(...) 逐字段等价（tests/verify 已交叉验证）。
-  function buildCenterIndex(strokeCenters, strokeCount) {
+  function buildCenterIndex(strokes, strokeCenters, strokeCount) {
     const n = strokeCenters.length
     const centerStart = new Array(n)
     const centerEnd = new Array(n)
+    const prefixUp = new Array(n + 1)
+    const prefixDown = new Array(n + 1)
+    prefixUp[0] = 0
+    prefixDown[0] = 0
     for (let k = 0; k < n; k++) {
       centerStart[k] = strokeCenters[k].startIndex
       centerEnd[k] = strokeCenters[k].endIndex
+      const d = centerIncomingDir(strokes, strokeCenters[k])
+      prefixUp[k + 1] = prefixUp[k] + (d === 'up' ? 1 : 0)
+      prefixDown[k + 1] = prefixDown[k] + (d === 'down' ? 1 : 0)
     }
     const cover = new Array(strokeCount).fill(-1)
     for (let k = 0; k < n; k++) {
@@ -220,7 +228,7 @@
       const e = Math.min(strokeCenters[k].endIndex, strokeCount - 1)
       for (let i = s; i <= e; i++) cover[i] = k
     }
-    return { centerStart, centerEnd, cover }
+    return { centerStart, centerEnd, cover, prefixUp, prefixDown }
   }
 
   // 两笔 [i, j] 之间是否存在笔中枢（与旧 .some 语义一致）
@@ -251,13 +259,31 @@
   // 两笔比较区间 [i, j] 内同向中枢数量：
   //   缠论趋势背驰要求至少两个同向中枢（趋势），只有一个中枢属于盘整背驰。
   // 中枢与比较区间相交即计入；方向按进入中枢的走势判定。
-  function countSameDirectionCenters(strokes, strokeCenters, i, j, dir) {
-    let count = 0
-    for (const c of strokeCenters) {
-      if (c.endIndex < i || c.startIndex > j) continue
-      if (centerIncomingDir(strokes, c) === dir) count++
+  // centerScan 生成的中枢 startIndex / endIndex 均严格递增且互不重叠，因此
+  // 相交集合恰为 [首个 endIndex >= i, 首个 startIndex > j)，两次二分定位后
+  // 用方向前缀和相减即可，替代旧版逐事件遍历全部中枢的 O(k·m)。
+  function countSameDirectionCenters(idx, i, j, dir) {
+    const m = idx.centerStart.length
+    if (!m) return 0
+    let lo = 0
+    let hi = m
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (idx.centerEnd[mid] < i) lo = mid + 1
+      else hi = mid
     }
-    return count
+    const from = lo
+    lo = 0
+    hi = m
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (idx.centerStart[mid] <= j) lo = mid + 1
+      else hi = mid
+    }
+    const to = lo
+    if (to <= from) return 0
+    const prefix = dir === 'up' ? idx.prefixUp : idx.prefixDown
+    return prefix[to] - prefix[from]
   }
 
   /*
@@ -274,74 +300,132 @@
    *   动量强度比 = 强度(j)/强度(i) < minMomentumDrop → 局部背驰成立。
    *   大级别确认：aligned 且 fading===true → confirmed（强背驰）。
    */
-  function calcDivergences(strokes, segments, strokeCenters, merged, closes, cfg, preHists, momCache) {
+  // 背驰计算上下文：结构输入 + 预计算动量 + 中枢索引。全量计算与实时尾部刷新
+  // 共用同一套 divergenceAt，避免两条路径出现口径分歧。analyzer 在结构未变时
+  // 持久化它，只更新被脏 hists 影响的尾部窗口。
+  function createDivergenceContext(strokes, segments, strokeCenters, merged, closes, cfg, preHists, momCache) {
     const dcfg = cfg.divergence
     // 允许外部传入已增量维护好的 MACD 柱序列（analyzer 增量链路），
     // 未传时按纯函数口径全量计算，保证两条路径逐字段一致。
     const hists = preHists !== undefined
       ? preHists
       : macdHistogram(closes, dcfg.macdFast, dcfg.macdSlow, dcfg.macdSignal)
-    const strokeMom = precomputeStrokeMoms(hists, merged, strokes, momCache)
-    const segMom = precomputeSegmentMoms(hists, merged, segments, momCache)
-    const centerIdx = dcfg.requireCenter
-      ? buildCenterIndex(strokeCenters, strokes.length)
-      : null
+    return {
+      strokes, segments, merged, dcfg, hists, momCache,
+      maxLookback: dcfg.maxLookbackStrokes > 0 ? dcfg.maxLookbackStrokes : Infinity,
+      strokeMom: precomputeStrokeMoms(hists, merged, strokes, momCache),
+      segMom: precomputeSegmentMoms(hists, merged, segments, momCache),
+      // 同向中枢计数（趋背/盘背判定）在 requireCenter 关闭时同样需要，
+      // 故索引始终构建；hasCenterBetween 仍只在 requireCenter 时使用。
+      centerIdx: buildCenterIndex(strokes, strokeCenters, strokes.length)
+    }
+  }
+
+  // 单根笔 j 的背驰事件（循环体抽成函数，全量与增量尾部重算共用）。
+  function divergenceAt(ctx, j) {
+    const { strokes, segments, dcfg, maxLookback, strokeMom, segMom, centerIdx } = ctx
+    const s = strokes[j]
+    const up = s.dir === 'up'
+    let prev = -1
+    const minI = Math.max(0, j - maxLookback)
+    for (let i = j - 2; i >= minI; i -= 2) {
+      const p = strokes[i]
+      const beyond = up ? s.toValue > p.toValue : s.toValue < p.toValue
+      if (!beyond) break
+      if (dcfg.requireCenter && !hasCenterBetween(centerIdx, i, j)) continue
+      // 同向面积口径下，早期反转笔可能没有任何同向柱（动量为 0）。这种笔
+      // 没有“力度”可比，继续向前找有实际同向动量的同向笔。
+      if (strokeMom[i] <= 0) continue
+      prev = i
+      break
+    }
+    if (prev < 0) return null
+    const momCur = strokeMom[j]
+    const momPrev = strokeMom[prev]
+    const ratio = momCur / momPrev
+    if (ratio >= dcfg.minMomentumDrop) return null
+    const bigLevel = bigLevelContext(segments, segMom, enclosingSegment(segments, s), s.dir)
+    const confirmed = bigLevel.aligned && bigLevel.fading === true
+    // 趋势背驰 vs 盘整背驰：同向中枢 ≥2 才是趋势背驰；1 个（或 requireCenter
+    // 关闭时 0 个）为盘整背驰。strong 仍表示大级别动量是否同步衰减，
+    // 两者是不同维度，不能再用 strength 冒充“趋背/盘背”。
+    const trendCenterCount = countSameDirectionCenters(centerIdx, prev, j, s.dir)
+    return {
+      si: j,
+      kind: up ? 'top' : 'bottom',
+      dir: s.dir,
+      prevSi: prev,
+      lookback: j - prev,
+      rawIndex: s.toRaw,
+      value: s.toValue,
+      provisional: j === strokes.length - 1,
+      momentum: { current: momCur, previous: momPrev, ratio },
+      bigLevel,
+      strength: confirmed ? 'strong' : 'weak',
+      confirmed,
+      divergenceType: trendCenterCount >= 2 ? 'trend' : 'consolidation',
+      trendCenterCount
+    }
+  }
+
+  function calcDivergencesWithContext(ctx) {
     const out = []
-    const maxLookback = dcfg.maxLookbackStrokes > 0 ? dcfg.maxLookbackStrokes : Infinity
-    for (let j = 2; j < strokes.length; j++) {
-      const s = strokes[j]
-      const up = s.dir === 'up'
-      let prev = -1
-      const minI = Math.max(0, j - maxLookback)
-      for (let i = j - 2; i >= minI; i -= 2) {
-        const p = strokes[i]
-        const beyond = up ? s.toValue > p.toValue : s.toValue < p.toValue
-        if (!beyond) break
-        if (dcfg.requireCenter && !hasCenterBetween(centerIdx, i, j)) continue
-        // 同向面积口径下，早期反转笔可能没有任何同向柱（动量为 0）。这种笔
-        // 没有“力度”可比，继续向前找有实际同向动量的同向笔。
-        if (strokeMom[i] <= 0) continue
-        prev = i
-        break
-      }
-      if (prev < 0) continue
-      const p = strokes[prev]
-      const momCur = strokeMom[j]
-      const momPrev = strokeMom[prev]
-      const ratio = momCur / momPrev
-      if (ratio >= dcfg.minMomentumDrop) continue
-      const bigLevel = bigLevelContext(
-        segments,
-        segMom,
-        enclosingSegment(segments, s),
-        s.dir
-      )
-      const confirmed = bigLevel.aligned && bigLevel.fading === true
-      // 趋势背驰 vs 盘整背驰：同向中枢 ≥2 才是趋势背驰；1 个（或 requireCenter
-      // 关闭时 0 个）为盘整背驰。strong 仍表示大级别动量是否同步衰减，
-      // 两者是不同维度，不能再用 strength 冒充“趋背/盘背”。
-      const trendCenterCount = countSameDirectionCenters(strokes, strokeCenters, prev, j, s.dir)
-      out.push({
-        si: j,
-        kind: up ? 'top' : 'bottom',
-        dir: s.dir,
-        prevSi: prev,
-        lookback: j - prev,
-        rawIndex: s.toRaw,
-        value: s.toValue,
-        provisional: j === strokes.length - 1,
-        momentum: { current: momCur, previous: momPrev, ratio },
-        bigLevel,
-        strength: confirmed ? 'strong' : 'weak',
-        confirmed,
-        divergenceType: trendCenterCount >= 2 ? 'trend' : 'consolidation',
-        trendCenterCount
-      })
+    for (let j = 2; j < ctx.strokes.length; j++) {
+      const ev = divergenceAt(ctx, j)
+      if (ev) out.push(ev)
     }
     return out
   }
 
-  const api = { macdHistogram, macdStep, macdHistogramState, rangeMomentum, windowIntensity, calcDivergences }
+  function calcDivergences(strokes, segments, strokeCenters, merged, closes, cfg, preHists, momCache) {
+    return calcDivergencesWithContext(
+      createDivergenceContext(strokes, segments, strokeCenters, merged, closes, cfg, preHists, momCache)
+    )
+  }
+
+  // 结构（笔/线段/中枢/merged）完全未变、仅尾部 hists 变化时的增量刷新。
+  // 调用方必须保证结构未变；dirtyFrom 为 hists 变化的最左原始下标。
+  //   1) 只重算 toRaw >= dirtyFrom 的窗口动量（momCache 对这些窗口自动失效）；
+  //   2) 倒着找出需要重算的最小笔下标：自身动量脏，或所在线段动量脏
+  //      （bigLevel 依赖所在线段及其前一同向线段的 segMom）；
+  //   3) 前缀事件逐字段不变，直接复用；只重算尾部事件。
+  // toRaw 递增、enclosingSegment 随笔下标单调不减，故倒扫遇到第一个「两者都
+  // 未变」的笔即可停止，更前面的笔必然不受影响。
+  function refreshDivergenceTail(ctx, prevResult, dirtyFrom) {
+    const { strokes, segments, hists, merged, momCache, strokeMom, segMom } = ctx
+    const n = strokes.length
+    if (!n) return []
+    let dirtySegFrom = segments.length
+    for (let k = segments.length - 1; k >= 0 && segments[k].toRaw >= dirtyFrom; k--) {
+      segMom[k] = segmentMomentum(hists, merged, segments[k], momCache)
+      dirtySegFrom = k
+    }
+    for (let k = n - 1; k >= 0 && strokes[k].toRaw >= dirtyFrom; k--) {
+      strokeMom[k] = strokeMomentum(hists, merged, strokes[k], momCache)
+    }
+    let fromSi = n
+    while (fromSi > 2) {
+      const s = strokes[fromSi - 1]
+      if (s.toRaw < dirtyFrom && enclosingSegment(segments, s) < dirtySegFrom) break
+      fromSi--
+    }
+    const out = []
+    for (const d of prevResult) {
+      if (d.si >= fromSi) break
+      out.push(d)
+    }
+    for (let j = Math.max(2, fromSi); j < n; j++) {
+      const ev = divergenceAt(ctx, j)
+      if (ev) out.push(ev)
+    }
+    return out
+  }
+
+  const api = {
+    macdHistogram, macdStep, macdHistogramState, rangeMomentum, windowIntensity,
+    calcDivergences, createDivergenceContext, divergenceAt, calcDivergencesWithContext,
+    refreshDivergenceTail
+  }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api
   } else {
