@@ -28,6 +28,42 @@
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp)
   }
 
+  // timestamp 严格升序且无重复：判断能否走有序归并快路径。
+  // NaN 的 < 比较恒为 false，含 NaN 时间戳的数组会被判为「非严格升序」并回退，
+  // 避免与 normalizeKlines 里 sort 的不确定顺序产生分歧（Infinity 可正常比较）。
+  function isStrictlySorted(list) {
+    for (let i = 1; i < list.length; i++) {
+      if (!(list[i - 1].timestamp < list[i].timestamp)) return false
+    }
+    return true
+  }
+
+  // cur（缓存内已归一化）与 incoming（本次新增，已归一化）都为严格升序时，
+  // 一次 O(n+m) 归并即可替代 concat + Map 去重 + 全量排序 O((n+m)log(n+m))。
+  // 相同 timestamp 取 incoming：与 normalizeKlines 的 map.set「后写覆盖」一致。
+  // 返回 null 表示前提不满足，由调用方回退到全量路径（语义与旧版完全一致）。
+  function mergeSortedKlines(cur, incoming, maxPerKey) {
+    if (!isStrictlySorted(cur) || !isStrictlySorted(incoming)) return null
+    const out = []
+    let i = 0
+    let j = 0
+    while (i < cur.length || j < incoming.length) {
+      if (i >= cur.length) out.push(incoming[j++])
+      else if (j >= incoming.length) out.push(cur[i++])
+      else {
+        const a = cur[i].timestamp
+        const b = incoming[j].timestamp
+        if (a < b) out.push(cur[i++])
+        else if (b < a) out.push(incoming[j++])
+        else {
+          out.push(incoming[j++]) // 同时间戳：新取数据覆盖缓存
+          i++
+        }
+      }
+    }
+    return out.length > maxPerKey ? out.slice(-maxPerKey) : out
+  }
+
   // K线缓存：maxPerKey 单键上限（保留最新），maxKeys 键数上限（LRU 淘汰）
   function createKlineCache(opts) {
     opts = opts || {}
@@ -60,7 +96,20 @@
       set(key, list) { put(key, list) },
       merge(key, list) {
         const cur = map.get(key) || []
-        put(key, cur.concat(list))
+        // 非数组入参（旧版 concat 也接受单个对象）走原路径，保持兼容
+        if (!Array.isArray(list)) {
+          put(key, cur.concat(list))
+          return
+        }
+        // 缓存由 put 保证已归一化且升序，绝大多数 merge 只需 O(n+m) 归并；
+        // 仅当时间戳含 NaN 等非严格升序情况时回退到全量归一化。
+        const merged = mergeSortedKlines(cur, normalizeKlines(list), maxPerKey)
+        if (merged) {
+          map.set(key, merged)
+          evict()
+        } else {
+          put(key, cur.concat(list))
+        }
       },
       remove(key) { map.delete(key) },
       clear() { map.clear() },

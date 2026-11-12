@@ -53,6 +53,124 @@ t('缓存：键数上限 LRU 淘汰', () => {
 })
 
 // ---------------------------------------------------------------------------
+// merge 有序归并快路径：与旧版「concat + 全量去重排序」逐字段等价。
+// legacyMergeCache 独立复刻旧 put + merge，不复用被测代码。
+function legacyMergeCache(cur, list, maxPerKey) {
+  const map = new Map()
+  for (const k of cur.concat(list)) {
+    if (k && typeof k.timestamp === 'number') map.set(k.timestamp, k)
+  }
+  return [...map.values()].sort((a, b) => a.timestamp - b.timestamp).slice(-maxPerKey)
+}
+
+t('缓存：merge 有序归并与旧版全量归一化逐字段等价（多场景）', () => {
+  const maxPerKey = 8
+  const scenarios = [
+    { name: '尾部追加', cur: [bar(1, 1), bar(3, 3)], list: [bar(4, 4), bar(5, 5)] },
+    { name: '头部插入', cur: [bar(3, 3), bar(5, 5)], list: [bar(1, 1), bar(2, 2)] },
+    { name: '中间插入+乱序', cur: [bar(1, 1), bar(5, 5)], list: [bar(3, 30), bar(2, 20), bar(4, 40)] },
+    { name: '同ts覆盖+新数据内重复', cur: [bar(1, 1), bar(3, 3)], list: [bar(3, 300), bar(3, 301), bar(2, 2)] },
+    { name: '无效项过滤', cur: [bar(1, 1), bar(2, 2)], list: [null, undefined, { close: 9 }, bar(3, 3)] },
+    { name: '空新数据', cur: [bar(1, 1)], list: [] },
+    { name: '空缓存+乱序', cur: [], list: [bar(2, 2), bar(1, 1)] },
+    {
+      name: '触发单键截断',
+      cur: [1, 2, 3, 4, 5, 6, 7].map((i) => bar(i, i)),
+      list: [bar(8, 8), bar(9, 9)]
+    }
+  ]
+  for (const s of scenarios) {
+    const cache = dl.createKlineCache({ maxPerKey })
+    cache.set('k', s.cur)
+    const baseline = cache.get('k') // 缓存内部归一化后的真实基线
+    cache.merge('k', s.list)
+    assert.deepStrictEqual(cache.get('k'), legacyMergeCache(baseline, s.list, maxPerKey), s.name)
+  }
+})
+
+t('缓存：merge 有序归并与全量归一化随机差分一致（300 轮）', () => {
+  let seed = 20261112
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    return seed / 0x7fffffff
+  }
+  const maxPerKey = 40
+  const cache = dl.createKlineCache({ maxPerKey })
+  cache.set('k', [])
+  let reference = []
+  for (let round = 0; round < 300; round++) {
+    const list = []
+    const count = 1 + Math.floor(rnd() * 6)
+    for (let i = 0; i < count; i++) {
+      const ts = Math.floor(rnd() * 60)
+      const r = rnd()
+      if (r < 0.08) list.push(null)
+      else if (r < 0.12) list.push({ close: ts }) // timestamp 非 number
+      else list.push(bar(ts, ts * 10 + round))
+    }
+    cache.merge('k', list)
+    reference = legacyMergeCache(reference, list, maxPerKey)
+    assert.deepStrictEqual(cache.get('k'), reference, 'round ' + round)
+  }
+})
+
+t('缓存：时间戳含 NaN 时回退全量归一化，语义不变', () => {
+  const maxPerKey = 10
+  const nanBar = { timestamp: NaN, open: 0, high: 1, low: -1, close: 9, volume: 1 }
+  const cache = dl.createKlineCache({ maxPerKey })
+  cache.set('k', [bar(1, 1), nanBar, bar(3, 3)])
+  let baseline = cache.get('k')
+  const list1 = [bar(2, 2), bar(4, 4)]
+  cache.merge('k', list1)
+  assert.deepStrictEqual(cache.get('k'), legacyMergeCache(baseline, list1, maxPerKey), '缓存含 NaN')
+  baseline = cache.get('k')
+  const list2 = [bar(5, 5), nanBar]
+  cache.merge('k', list2)
+  assert.deepStrictEqual(cache.get('k'), legacyMergeCache(baseline, list2, maxPerKey), '新数据含 NaN')
+})
+
+t('缓存：大缓存逐根追加保持有序、上限与末根刷新', () => {
+  const maxPerKey = 5000
+  const cache = dl.createKlineCache({ maxPerKey })
+  const initial = []
+  for (let i = 0; i < 3000; i++) initial.push(bar(i, i))
+  cache.set('k', initial)
+  for (let i = 3000; i < 3200; i++) cache.merge('k', [bar(i, i)])
+  let v = cache.get('k')
+  assert.strictEqual(v.length, 3200)
+  assert.strictEqual(v[0].timestamp, 0)
+  assert.strictEqual(v[3199].timestamp, 3199)
+  // init 缓存复用补拉会重新包含末根：同时间戳必须覆盖为终值
+  cache.merge('k', [bar(3199, 99999)])
+  assert.strictEqual(cache.get('k')[3199].close, 99999)
+  for (let i = 3200; i < 5100; i++) cache.merge('k', [bar(i, i)])
+  v = cache.get('k')
+  assert.strictEqual(v.length, maxPerKey)
+  assert.strictEqual(v[0].timestamp, 100)
+  assert.strictEqual(v[v.length - 1].timestamp, 5099)
+})
+
+t('缓存：merge 不改变 LRU 顺序与 get 副本语义', () => {
+  const cache = dl.createKlineCache({ maxKeys: 2 })
+  cache.set('a', [bar(1, 1)])
+  cache.set('b', [bar(1, 1)])
+  cache.merge('a', [bar(2, 2)]) // 与旧版一致：merge 不触碰 LRU
+  cache.set('c', [bar(1, 1)])
+  assert(!cache.has('a'), 'a 仍是最久未用，应被淘汰')
+  assert(cache.has('b') && cache.has('c'))
+  const snap = cache.get('b')
+  snap.push(bar(99, 99))
+  assert.strictEqual(cache.get('b').length, 1, 'get 返回副本')
+})
+
+t('缓存：merge 非数组入参保持旧版 concat 行为', () => {
+  const cache = dl.createKlineCache()
+  cache.set('k', [bar(1, 1)])
+  cache.merge('k', bar(2, 2))
+  assert.deepStrictEqual(cache.get('k').map((b) => b.timestamp), [1, 2])
+})
+
+// ---------------------------------------------------------------------------
 t('重试：可重试错误按退避重试后成功', async () => {
   let attempts = 0
   const delays = []
