@@ -17,7 +17,7 @@ const assert = require('assert')
 const { randomWalk } = require('./helpers')
 const t = (name, fn) => global.__registerTest('draw: ' + name, fn)
 
-const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/divergence.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'realtime.js', 'main.js']
+const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js', 'src/center.js', 'src/divergence.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js', 'exchange-adapters.js', 'realtime.js', 'chart-drawing.js', 'main.js']
 
 function loadApp() {
   const sb = { console, __CHANLUN_TEST__: true, fetch: async () => ({ ok: false, status: 500, text: async () => '' }) }

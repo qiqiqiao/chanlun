@@ -52,8 +52,10 @@ index.html         # Main entry, loads scripts in dependency order (no build ste
 │  └─ analyzer.js      # Incremental calculation orchestrator
 ├─ chanlun.js          # Module assembly layer → window.chanlun / module.exports
 ├─ data-layer.js       # Data caching, retry logic, WebSocket management, backfill
+├─ exchange-adapters.js # Binance / OKX REST and WebSocket protocol adapters
 ├─ realtime.js         # Real-time bar update strategy (content-signature based)
-├─ main.js             # KLineChart integration, exchange adapters, drawing, UI
+├─ chart-drawing.js    # Chan overlays and divergence sub-chart drawing
+├─ main.js             # Page state, KLineChart integration, drawing, and UI
 ├─ style.css           # Layout and theming
 └─ tests/              # Zero-dependency test suite
 ```
@@ -219,6 +221,14 @@ node tests/run.js tests/segment-edge.test.js
 
 # Run real-network tests (requires LIVE_NETWORK=1)
 LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js
+```
+
+An optional real Chromium smoke test checks chart startup, period switching, WebSocket subscription wiring, and the visible fallback when the KLineChart CDN is unavailable. It uses the pinned Playwright version and requires network access for the CDN:
+
+```bash
+npm install --no-save --package-lock=false playwright@1.65.0
+npx playwright install chromium
+npm run test:browser
 ```
 
 Coverage includes:

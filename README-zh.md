@@ -18,8 +18,10 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 │  └─ analyzer.js      增量计算（createAnalyzer：update / updateLast）
 ├─ chanlun.js          模块装配层 → window.chanlun / module.exports（API 与旧版单文件一致）
 ├─ data-layer.js       可靠数据层：K线缓存、指数退避重试、WS 自动重连、图表加载器
+├─ exchange-adapters.js Binance / OKX REST 与 WebSocket 协议适配
 ├─ realtime.js         实时行情更新策略（内容签名判末根变化，P0 修复）
-├─ main.js             图表集成（klinecharts v10 + 交易所适配 + 缠论绘制）
+├─ chart-drawing.js    缠论主图与背驰副图绘制
+├─ main.js             页面状态、图表集成、缠论绘制与 UI 交互
 ├─ package.json        仅测试脚本（无运行时依赖）
 ├─ LICENSE             MIT
 ├─ .github/workflows/  CI
@@ -31,7 +33,7 @@ index.html     脚本按依赖顺序加载（无构建步骤）
    ├─ realtime.test.js    实时更新策略（P0：对象复用场景回归）
    ├─ realtime-stress.test.js   5000 K 实时链路压测（原地跳动/收盘/新K，逐 tick 与全量一致）
    ├─ draw.test.js    绘制可见窗口过滤回归（线段中枢横跨左边界漏画修复）
-   ├─ exchange-adapters.test.js   Binance/OKX 适配器契约 + 分页集成（vm 加载真实 main.js）
+   ├─ exchange-adapters.test.js   Binance/OKX 适配器契约 + 分页集成（vm 加载真实适配模块与 main.js）
    ├─ live-network.test.js  真实网络压测（LIVE_NETWORK=1 启用，默认跳过）
    └─ browser-smoke.test.js 浏览器装配冒烟（vm 模拟，验证 index.html 脚本路径）
 ```
@@ -96,6 +98,14 @@ barSignature(bar) = timestamp|open|high|low|close|volume|isBarClosed
 node tests/run.js            # 全部测试（130+ 项，不含真实网络）
 LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js   # 真实 Binance/OKX 链路压测
 node tests/run.js tests/segment-edge.test.js   # 单文件
+```
+
+真实 Chromium 浏览器冒烟测试（需联网安装 Playwright / Chromium，并访问固定版本的 KLineChart CDN）：
+
+```bash
+npm install --no-save --package-lock=false playwright@1.65.0
+npx playwright install chromium
+npm run test:browser
 ```
 
 ## 增量计算

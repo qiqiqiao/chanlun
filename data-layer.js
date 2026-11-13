@@ -126,9 +126,10 @@
   // 重试抓取：指数退避 + 随机抖动；classify 决定错误是否可重试
   function createRetryFetch(opts) {
     opts = opts || {}
-    const retries = opts.retries || 3
-    const baseDelay = opts.baseDelay || 800
-    const maxDelay = opts.maxDelay || 8000
+    // 保留正数配置的既有语义（retries 是最多尝试次数）；0 表示只发起初始请求。
+    const retries = opts.retries === undefined ? 3 : Math.max(1, opts.retries)
+    const baseDelay = opts.baseDelay === undefined ? 800 : opts.baseDelay
+    const maxDelay = opts.maxDelay === undefined ? 8000 : opts.maxDelay
     const jitter = opts.jitter !== false
     const sleepImpl = opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)))
     const classify = opts.classify || ((e) => ({ retryable: true }))
@@ -163,8 +164,8 @@
     const connectImpl = opts.connect || ((u) => new WebSocket(u))
     const schedule = opts.schedule || ((delay, fn) => setTimeout(fn, delay))
     const clear = opts.clear || ((timer) => clearTimeout(timer))
-    const baseDelay = opts.baseDelay || 1000
-    const maxDelay = opts.maxDelay || 15000
+    const baseDelay = opts.baseDelay === undefined ? 1000 : opts.baseDelay
+    const maxDelay = opts.maxDelay === undefined ? 15000 : opts.maxDelay
     const jitter = opts.jitter !== false
     // 静默断线看门狗：连接打开后超过 idleTimeoutMs 没收到任何报文 → 主动 close，
     // 由现有 onclose 重连 + REST 回补流程恢复（休眠唤醒/网络切换后常不发 close）。
@@ -489,7 +490,17 @@
           if (gen !== subSeq) return
           const since = lastBarTs
           if (since === null) return
-          const bars = await fetchSince(ex, ticker, period, since, beforeOf)
+          let bars
+          try {
+            bars = await fetchSince(ex, ticker, period, since, beforeOf)
+          } catch (e) {
+            // 重连仍会恢复订阅（socket 层会在回调 settle 后 resume），但不能
+            // 静默丢掉回补失败：上报给页面，让用户知道行情可能存在缺口。
+            if (gen === subSeq) {
+              onError('重连行情回补失败：' + (e && e.message ? e.message : String(e)))
+            }
+            return
+          }
           if (gen !== subSeq) return
           if (!bars.length) return
           cache.merge(key, bars)
@@ -501,6 +512,9 @@
         }
 
         activeWs = ex.subscribe(ticker, period, (bar) => {
+          // 保持缓存与实时图表一致：同一时间戳覆盖未收盘末根，新时间戳追加。
+          // 重连 REST 回补和后续切回该品种/周期都会复用这份最新数据。
+          if (bar && typeof bar.timestamp === 'number') cache.merge(key, [bar])
           callback(bar)
           noteBarTs(bar && bar.timestamp)
           onData()

@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install browser test tooling
+        run: npm install --no-save --package-lock=false playwright@1.65.0
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run real browser smoke test
+        run: npm run test:browser
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -18,7 +32,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Syntax check
         run: |
-          for f in chanlun.js data-layer.js realtime.js main.js src/*.js; do
+          for f in chanlun.js data-layer.js exchange-adapters.js realtime.js chart-drawing.js main.js src/*.js; do
             node --check "$f"
           done
       - name: Run tests (offline)

@@ -15,7 +15,7 @@ const t = (name, fn) => global.__registerTest('fetch-timeout: ' + name, fn)
 
 const CORE = ['src/config.js', 'src/merge.js', 'src/fractal.js', 'src/stroke.js', 'src/segment.js',
   'src/center.js', 'src/divergence.js', 'src/analyzer.js', 'chanlun.js', 'data-layer.js',
-  'realtime.js', 'main.js']
+  'exchange-adapters.js', 'realtime.js', 'chart-drawing.js', 'main.js']
 
 // vm 沙箱：hang 住的 fetch + 真实定时器/AbortController + 最小 DOM（init 延迟不执行）
 function loadApp(fetchImpl) {

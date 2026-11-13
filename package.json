@@ -6,6 +6,7 @@
   "license": "MIT",
   "scripts": {
     "test": "node tests/run.js",
+    "test:browser": "node tests/browser-real-smoke.js",
     "test:live": "LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js"
   },
   "engines": {

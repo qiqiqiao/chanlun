@@ -3,6 +3,7 @@
  *
  * 项目无构建步骤：index.html 按依赖顺序加载 src/*.js（注册到 window.Chanlun）、
  * chanlun.js（装配 API → window.chanlun）、data-layer.js（→ window.dataLayer）、
+ * exchange-adapters.js（→ window.exchangeAdapters）、chart-drawing.js（→ window.chartDrawing）、
  * main.js。本测试用 node:vm 模拟浏览器全局环境，验证：
  *   - 各模块在浏览器路径下正确注册与装配（无 module.exports）
  *   - 装配后的输出与 Node require 路径完全一致
@@ -26,7 +27,9 @@ const CORE_FILES = [
   'src/analyzer.js',
   'chanlun.js',
   'data-layer.js',
-  'realtime.js'
+  'exchange-adapters.js',
+  'realtime.js',
+  'chart-drawing.js'
 ]
 
 function runBrowser(files) {
@@ -269,7 +272,7 @@ t('交易所订阅的 WebSocket 参数：OKX 心跳 / Binance 更宽静默阈值
 t('index.html 脚本清单可全部加载（除 CDN 与 main.js 的 DOM 依赖）', () => {
   // 按 index.html 的顺序加载核心脚本，确保没有依赖顺序错误
   const sb = runBrowser(CORE_FILES)
-  assert(sb.chanlun && sb.dataLayer && sb.realtime)
+  assert(sb.chanlun && sb.dataLayer && sb.exchangeAdapters && sb.realtime && sb.chartDrawing)
   // 加载 main.js：klinecharts 需 stub；document.readyState=loading → init 延迟执行
   sandbox_main(sb)
 })

@@ -215,6 +215,39 @@ t('重试：次数耗尽后抛出最后错误', async () => {
   assert.strictEqual(attempts, 2)
 })
 
+t('重试：retries=0 保留一次初始请求且不重试', async () => {
+  let attempts = 0
+  const delays = []
+  const retryFetch = dl.createRetryFetch({
+    retries: 0,
+    sleep: async (ms) => { delays.push(ms) },
+    classify: () => ({ retryable: true })
+  })
+  await assert.rejects(retryFetch(async () => { attempts++; throw new Error('offline') }), /offline/)
+  assert.strictEqual(attempts, 1, '零重试仍应执行一次初始请求')
+  assert.deepStrictEqual(delays, [], '零重试不应等待后再次请求')
+})
+
+t('重试：零退避配置被尊重', async () => {
+  for (const opts of [
+    { baseDelay: 0 },
+    { baseDelay: 100, maxDelay: 0 }
+  ]) {
+    let attempts = 0
+    const delays = []
+    const retryFetch = dl.createRetryFetch({
+      ...opts,
+      retries: 3,
+      jitter: false,
+      sleep: async (ms) => { delays.push(ms) },
+      classify: () => ({ retryable: true })
+    })
+    await assert.rejects(retryFetch(async () => { attempts++; throw new Error('offline') }), /offline/)
+    assert.strictEqual(attempts, 3)
+    assert.deepStrictEqual(delays, [0, 0], '零退避应立即执行下一次尝试')
+  }
+})
+
 // ---------------------------------------------------------------------------
 // 假 WebSocket：可触发 onopen/onmessage/onclose
 function FakeWs() {
@@ -615,6 +648,27 @@ t('加载器：订阅/解绑', () => {
   assert.strictEqual(ex.subClosed, true)
 })
 
+t('加载器：实时订阅同步缓存并按时间戳覆盖', () => {
+  const ex = new FakeExchange({})
+  const env = mkLoader(ex)
+  const key = 'Fake:BTC:day-1'
+  env.cache.set(key, [bar(1, 10)])
+  const updates = []
+  env.loader.subscribeBar({
+    symbol: { ticker: 'BTC' },
+    period: { type: 'day', span: 1 },
+    callback: (b) => updates.push(b)
+  })
+
+  ex.subCb(bar(1, 11)) // 更新当前未收盘 K 线
+  ex.subCb(bar(2, 20)) // 新时间戳追加
+  const cached = env.cache.get(key)
+  assert.deepStrictEqual(cached.map((b) => b.timestamp), [1, 2])
+  assert.strictEqual(cached[0].close, 11, '同时间戳实时值覆盖旧缓存')
+  assert.strictEqual(cached[1].close, 20, '新 K 线写入缓存')
+  assert.strictEqual(updates.length, 2, '图表订阅回调仍收到每条实时更新')
+})
+
 t('加载器：WS 重连 → REST 回补断线期间的K线', async () => {
   const all = [bar(10, 10), bar(11, 11), bar(12, 12), bar(13, 13), bar(14, 14), bar(15, 15)]
   const ex = new FakeExchange({})
@@ -641,6 +695,22 @@ t('加载器：WS 重连 → REST 回补断线期间的K线', async () => {
     [10, 11, 12, 13, 14, 15],
     '回补结果写入缓存'
   )
+})
+
+t('加载器：WS 重连回补失败 → 上报错误并恢复订阅流程', async () => {
+  const ex = new FakeExchange({})
+  ex.fetchKlines = async () => { throw new Error('REST unavailable') }
+  const env = mkLoader(ex)
+  env.cache.set('Fake:BTC:day-1', [bar(10, 10), bar(11, 11)])
+  env.loader.subscribeBar({
+    symbol: { ticker: 'BTC' },
+    period: { type: 'day', span: 1 },
+    callback: () => {}
+  })
+
+  // 回补错误被 loader 消化并报告；回调正常结束后，socket 层可继续放行 WS 消息。
+  await ex.subOpts.onReconnect()
+  assert.deepStrictEqual(env.errors, ['重连行情回补失败：REST unavailable'])
 })
 
 t('加载器：回补锚点随实时末根推进（只补断线缺口）', async () => {
