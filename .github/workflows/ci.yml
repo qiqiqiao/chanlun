@@ -6,6 +6,18 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dev dependencies
+        run: npm ci
+      - name: Run ESLint (problem-oriented rules only)
+        run: npm run lint
+
   browser-smoke:
     runs-on: ubuntu-latest
     steps:

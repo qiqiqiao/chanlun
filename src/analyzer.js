@@ -68,6 +68,9 @@
           strokeCenters,
           segmentCenters,
           divergences,
+          // 增量维护的 MACD 柱序列（只在尾部追加/末元素原地更新）。
+          // 暴露给 CHAN_DIV 等消费方复用，避免每 tick 全量重算 MACD。
+          hists,
           dataLen
         }
       }

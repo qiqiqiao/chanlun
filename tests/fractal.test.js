@@ -119,7 +119,6 @@ t('分型：createAnalyzer 增量与全量一致', () => {
     p = cl
   }
   const cfg = c.normalizeConfig()
-  const full = c.analyze(bars, cfg)
   const a = c.createAnalyzer(cfg)
   a.update(bars.slice(0, 20))
   // 分多步增量，每步与全量对比分型（严格一致）

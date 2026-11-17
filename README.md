@@ -203,7 +203,7 @@ chanlun/
 │   ├── divergence.js
 │   └── analyzer.js
 ├── tests/              # All tests run with `node tests/run.js`
-├── package.json        # Test scripts (no dependencies)
+├── package.json        # Test scripts + eslint dev dependency (no runtime dependencies)
 ├── LICENSE             # MIT
 └── .github/workflows/  # CI
 ```
@@ -221,13 +221,15 @@ node tests/run.js tests/segment-edge.test.js
 
 # Run real-network tests (requires LIVE_NETWORK=1)
 LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js
+
+# ESLint (problem-oriented rules; needs npm ci first)
+npm ci && npm run lint
 ```
 
 An optional real Chromium smoke test checks chart startup, period switching, WebSocket subscription wiring, and the visible fallback when the KLineChart CDN is unavailable. It uses the pinned Playwright version and requires network access for the CDN:
 
 ```bash
-npm install --no-save --package-lock=false playwright@1.65.0
-npx playwright install chromium
+npm run test:browser:setup   # installs playwright@1.65.0 + chromium
 npm run test:browser
 ```
 

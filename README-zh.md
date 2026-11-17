@@ -22,7 +22,7 @@ index.html     脚本按依赖顺序加载（无构建步骤）
 ├─ realtime.js         实时行情更新策略（内容签名判末根变化，P0 修复）
 ├─ chart-drawing.js    缠论主图与背驰副图绘制
 ├─ main.js             页面状态、图表集成、缠论绘制与 UI 交互
-├─ package.json        仅测试脚本（无运行时依赖）
+├─ package.json        测试脚本 + eslint 开发依赖（无运行时依赖）
 ├─ LICENSE             MIT
 ├─ .github/workflows/  CI
 └─ tests/              零依赖测试（node tests/run.js）
@@ -98,13 +98,13 @@ barSignature(bar) = timestamp|open|high|low|close|volume|isBarClosed
 node tests/run.js            # 全部测试（130+ 项，不含真实网络）
 LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js   # 真实 Binance/OKX 链路压测
 node tests/run.js tests/segment-edge.test.js   # 单文件
+npm ci && npm run lint        # ESLint 静态检查（问题导向规则，需 Node 18+）
 ```
 
 真实 Chromium 浏览器冒烟测试（需联网安装 Playwright / Chromium，并访问固定版本的 KLineChart CDN）：
 
 ```bash
-npm install --no-save --package-lock=false playwright@1.65.0
-npx playwright install chromium
+npm run test:browser:setup   # 等价于下面两条：安装 playwright@1.65.0 + chromium
 npm run test:browser
 ```
 

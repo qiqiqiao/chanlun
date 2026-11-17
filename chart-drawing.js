@@ -47,15 +47,22 @@
   // 消失（笔中枢遍布全数据所以不明显）。修复：二分定位后前补一个元素。
   // 前提：起点单调递增、元素不重叠（中枢不重叠；笔/线段首尾相连），
   // 因此最多只有一个元素横跨左边界。
-  function visibleInRange(arr, startKey, endKey, from, to) {
+  //
+  // 回调式迭代（零分配）：绘制函数每帧调用多次，forEachVisible 不产生
+  // 中间数组；需要数组形态的调用方（测试等）用 visibleInRange。
+  function forEachVisible(arr, startKey, endKey, from, to, cb) {
     let i = lowerBound(arr, startKey, from)
     if (i > 0 && endKey(arr[i - 1]) >= from) i--
-    const result = []
     for (; i < arr.length && startKey(arr[i]) <= to; i++) {
       const el = arr[i]
       if (endKey(el) < from) continue
-      result.push(el)
+      cb(el)
     }
+  }
+
+  function visibleInRange(arr, startKey, endKey, from, to) {
+    const result = []
+    forEachVisible(arr, startKey, endKey, from, to, (el) => result.push(el))
     return result
   }
 
@@ -122,7 +129,7 @@
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
       ctx.textAlign = 'left'
       ctx.textBaseline = 'top'
-      for (const cc of visibleInRange(chanState.segmentCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
+      forEachVisible(chanState.segmentCenters, (z) => z.startRaw, (z) => z.endRaw, from, to, (cc) => {
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
         const up = centerDirOfCached(cc) === 'up'
@@ -132,10 +139,10 @@
         ctx.fillStyle = palette.border
         ctx.fillText(fmtPrice(cc.zsHigh), X(cc.endRaw) + 4, Y(cc.zsHigh) - 4)
         ctx.fillText(fmtPrice(cc.zsLow), X(cc.endRaw) + 4, Y(cc.zsLow) - 1)
-      }
+      })
     }
     if (opts.strokeCenter) {
-      for (const cc of visibleInRange(chanState.strokeCenters, (z) => z.startRaw, (z) => z.endRaw, from, to)) {
+      forEachVisible(chanState.strokeCenters, (z) => z.startRaw, (z) => z.endRaw, from, to, (cc) => {
         const x = X(cc.startRaw) - halfGapBar
         const w = X(cc.endRaw) - X(cc.startRaw) + gapBar
         const up = centerDirOfCached(cc) === 'up'
@@ -145,14 +152,14 @@
           palette.fill, palette.border,
           { label: '笔中枢', dashed: true }
         )
-      }
+      })
     }
 
     // 2. 线段（被“线段破坏”扩展规则强行终结的段用虚线 + 警示色区分）
     if (opts.segment) {
       ctx.lineWidth = 2.2
       const setSegDash = typeof ctx.setLineDash === 'function' ? (on) => ctx.setLineDash(on ? [6, 4] : []) : null
-      for (const seg of visibleInRange(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to)) {
+      forEachVisible(chanState.segments, (s) => s.fromRaw, (s) => s.toRaw, from, to, (seg) => {
         const destroyed = seg.destroyed === true
         ctx.strokeStyle = destroyed ? COLORS.segmentDestroyed : COLORS.segment
         if (setSegDash) setSegDash(destroyed)
@@ -160,27 +167,27 @@
         ctx.moveTo(X(seg.fromRaw), Y(seg.dir === 'up' ? seg.from.low : seg.from.high))
         ctx.lineTo(X(seg.toRaw), Y(seg.dir === 'up' ? seg.to.high : seg.to.low))
         ctx.stroke()
-      }
+      })
       if (setSegDash) setSegDash(false)
     }
 
     // 5. 笔
     if (opts.stroke) {
       ctx.lineWidth = 1.6
-      for (const s of visibleInRange(chanState.strokes, (st) => st.fromRaw, (st) => st.toRaw, from, to)) {
+      forEachVisible(chanState.strokes, (st) => st.fromRaw, (st) => st.toRaw, from, to, (s) => {
         ctx.strokeStyle = s.dir === 'up' ? COLORS.strokeUp : COLORS.strokeDown
         ctx.beginPath()
         ctx.moveTo(X(s.fromRaw), Y(s.fromValue))
         ctx.lineTo(X(s.toRaw), Y(s.toValue))
         ctx.stroke()
-      }
+      })
     }
 
     // 6. 分型
     if (opts.fractal) {
       const marker = Math.max(3.5, Math.min(7, gapBar * 0.3))
       ctx.lineWidth = 1
-      for (const f of visibleInRange(chanState.fractals, (f) => f.rawMiddle, (f) => f.rawMiddle, from, to)) {
+      forEachVisible(chanState.fractals, (f) => f.rawMiddle, (f) => f.rawMiddle, from, to, (f) => {
         const x = X(f.rawMiddle)
         if (f.type === 'top') {
           const y = Y(f.high) + 3
@@ -201,7 +208,7 @@
           ctx.closePath()
           ctx.fill()
         }
-      }
+      })
     }
 
     // 7. 笔背驰标记：▼/▲ 箭头 + 与前比较笔的虚线连接 + 趋背/盘背区分 + 强度比
@@ -214,7 +221,7 @@
       ctx.textBaseline = 'alphabetic'
       ctx.lineWidth = 1
       const setDash = typeof ctx.setLineDash === 'function' ? (on) => ctx.setLineDash(on ? [3, 3] : []) : null
-      for (const d of visibleInRange(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to)) {
+      forEachVisible(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to, (d) => {
         const strong = d.strength === 'strong'
         const provisional = d.provisional === true
         const color = provisional
@@ -275,7 +282,7 @@
         if (strong && !provisional) ctx.fill()
         else ctx.stroke()
         if (setDash) setDash(false)
-      }
+      })
       ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif'
     }
 
@@ -299,8 +306,14 @@
     const X = (i) => xAxis.convertToPixel(i)
     const Y = (v) => yAxis.convertToPixel(v)
     const res = indicator.result
-    const hist = Array.isArray(res) ? res.map((r) => (r && typeof r.value === 'number' ? r.value : 0)) : null
-    if (!hist) return true
+    if (!Array.isArray(res)) return true
+    // 直接按下标读取 result，不做 res.map 全量拷贝——本函数每次重绘
+    // （含缩放/平移）都会执行，拷贝会在每帧分配一个 n 元素数组。
+    const histLength = res.length
+    const histAt = (i) => {
+      const r = res[i]
+      return r && typeof r.value === 'number' ? r.value : 0
+    }
     const y0 = Y(0)
     ctx.textAlign = 'center'
     ctx.textBaseline = 'alphabetic'
@@ -310,20 +323,19 @@
         ? (d.strength === 'strong' ? COLORS.divAreaTopStrong : COLORS.divAreaTopWeak)
         : (d.strength === 'strong' ? COLORS.divAreaBottomStrong : COLORS.divAreaBottomWeak)
 
-    // 仅绘制可见窗口内的背驰（避免全量遍历所有分歧）
-    const visibleDivs = visibleInRange(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to)
-    for (const d of visibleDivs) {
+    // 仅绘制可见窗口内的背驰（避免全量遍历所有分歧）；回调式迭代零分配
+    forEachVisible(chanState.divergences, (d) => d.rawIndex, (d) => d.rawIndex, from, to, (d) => {
       const cur = chanState.strokes[d.si]
       const prev = chanState.strokes[d.prevSi]
-      if (!cur || !prev) continue
+      if (!cur || !prev) return
       const color = areaColor(d)
       ctx.fillStyle = color
       // 两段走势的 MACD 柱区域高亮
       for (const rng of [[prev.fromRaw, prev.toRaw], [cur.fromRaw, cur.toRaw]]) {
         const a = Math.max(from, rng[0])
         const b = Math.min(to, rng[1])
-        for (let i = a; i <= b && i < hist.length; i++) {
-          const h = hist[i]
+        for (let i = a; i <= b && i < histLength; i++) {
+          const h = histAt(i)
           const top = Math.min(y0, Y(h))
           const bot = Math.max(y0, Y(h))
           ctx.fillRect(X(i) - halfGapBar, top, gapBar, Math.max(1, bot - top))
@@ -349,11 +361,11 @@
         ctx.fillText('B:' + aPrev.toFixed(1), X(prev.toRaw), y0 - 4)
         ctx.fillText('A:' + aCur.toFixed(1), X(cur.toRaw), y0 - 4)
       }
-    }
+    })
     return true
   }
 
-    return { drawCenterRect, lowerBound, visibleInRange, fmtPrice, fillTextBackground, centerDirOf, drawChan, drawChanDiv }
+    return { drawCenterRect, lowerBound, visibleInRange, forEachVisible, fmtPrice, fillTextBackground, centerDirOf, drawChan, drawChanDiv }
   }
 
   const api = { create: createChartDrawing }

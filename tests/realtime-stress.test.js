@@ -40,7 +40,6 @@ t('5000 K：原地跳动 / 收盘 / 新K 连续更新，始终与全量一致', 
   barInvariants(r.state, bars.length)
 
   const rnd = makeRng(77)
-  let closed = false
   const TICKS = 150
   for (let k = 0; k < TICKS; k++) {
     const roll = rnd()
@@ -57,7 +56,6 @@ t('5000 K：原地跳动 / 收盘 / 新K 连续更新，始终与全量一致', 
     } else if (roll < 0.8) {
       // 场景 B：当前 K 线收盘标志翻转（收盘 ⇄ 未收盘）
       last.isBarClosed = !last.isBarClosed
-      closed = !!last.isBarClosed
       r = updater.update(bars)
       assert.strictEqual(r.action, 'replaceLast', 'tick ' + k + ' 收盘标志翻转')
     } else {
@@ -72,7 +70,6 @@ t('5000 K：原地跳动 / 收盘 / 新K 连续更新，始终与全量一致', 
         isBarClosed: false
       }
       bars.push(next)
-      closed = false
       r = updater.update(bars)
       assert.strictEqual(r.action, 'append', 'tick ' + k + ' 新K追加')
     }

@@ -63,7 +63,6 @@ t('P0：同一对象原地改 close / high / low / open / volume / closed 各自
     assert.strictEqual(r.action, 'replaceLast', k + ' 变化必须触发 replaceLast')
     assert.notStrictEqual(updater.debug.lastLastSignature, before, k + ' 签名必须变化')
     // 复位，避免影响后续字段
-    const sig = realtime.barSignature(last)
     updater.update(bars) // 同签名 → skip
     assert.strictEqual(updater.update(bars).action, 'skip', k + ' 复位后同签名 skip')
     last[k] = undefined // 清掉该字段，测试下一个字段

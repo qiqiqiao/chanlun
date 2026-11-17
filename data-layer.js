@@ -101,6 +101,25 @@
           put(key, cur.concat(list))
           return
         }
+        // 单根 fast path（实时订阅每 tick 合并 1 根，占绝大多数调用）：
+        // 缓存内部数组由 put 保证已归一化升序，直接与末根比较时间戳即可
+        // O(1) 追加/原地覆盖，省去 isStrictlySorted 全扫 + 全量归并拷贝。
+        // 同时间戳覆盖：与 normalizeKlines 的 map.set「后写覆盖」语义一致。
+        if (list.length === 1 && cur.length) {
+          const bar = list[0]
+          if (bar && typeof bar.timestamp === 'number') {
+            const lastTs = cur[cur.length - 1].timestamp
+            if (bar.timestamp > lastTs) {
+              cur.push(bar)
+              if (cur.length > maxPerKey) map.set(key, cur.slice(-maxPerKey))
+              return
+            }
+            if (bar.timestamp === lastTs) {
+              cur[cur.length - 1] = bar
+              return
+            }
+          }
+        }
         // 缓存由 put 保证已归一化且升序，绝大多数 merge 只需 O(n+m) 归并；
         // 仅当时间戳含 NaN 等非严格升序情况时回退到全量归一化。
         const merged = mergeSortedKlines(cur, normalizeKlines(list), maxPerKey)

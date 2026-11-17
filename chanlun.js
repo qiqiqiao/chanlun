@@ -43,13 +43,18 @@
       const segments = calcSegments(strokes, cfg)
       const strokeCenters = calcCenters(strokes, cfg)
       const segmentCenters = calcCenters(segments, cfg)
+      const closes = klineDataList.map((k) => k.close)
+      // 与 analyzer 增量链路同口径：MACD 柱序列算一次，背驰计算与输出复用同一份
+      const dcfg = cfg.divergence
+      const hists = macdHistogram(closes, dcfg.macdFast, dcfg.macdSlow, dcfg.macdSignal)
       const divergences = calcDivergences(
         strokes,
         segments,
         strokeCenters,
         merged,
-        klineDataList.map((k) => k.close),
-        cfg
+        closes,
+        cfg,
+        hists
       )
       return {
         merged,
@@ -60,6 +65,7 @@
         strokeCenters,
         segmentCenters,
         divergences,
+        hists,
         dataLen: klineDataList.length
       }
     }

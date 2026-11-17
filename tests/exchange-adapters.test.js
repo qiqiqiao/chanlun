@@ -103,7 +103,6 @@ t('OKX fetchKlines：URL 参数 / limit 300 上限 / 降序→升序映射', asy
   assert.strictEqual(bars[299].timestamp, history[399][0])
   assert.strictEqual(bars[0].close, 100.5 + 100)
   // URL 参数
-  const call = sb.__chanlunChart.state ? null : null
   const url = sb.fetch.calls[0]
   const p = new URL(url).searchParams
   assert.strictEqual(p.get('instId'), 'BTC-USDT')

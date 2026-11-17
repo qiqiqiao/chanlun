@@ -44,8 +44,6 @@
     return p ? p.label : ''
   }
 
-  const QUICK_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'DOGEUSDT']
-
   // ---------------------------------------------------------------------------
   // UI 状态持久化（localStorage）：交易所/品种/周期/全部显示开关，刷新后恢复
   // ---------------------------------------------------------------------------
@@ -65,6 +63,16 @@
     ['indOptions', 'chinaColors', 'tg-china']
   ]
 
+  // symbol 白名单校验（单一来源）：持久化恢复与 UI 输入共用同一口径——
+  // 非空、≤24 字符、仅字母/数字/连字符/下划线/空格（适配器 normalize 会去分隔符）。
+  // 非法返回 null。
+  function normalizeSymbolInput(raw) {
+    if (typeof raw !== 'string') return null
+    const s = raw.trim().toUpperCase()
+    if (!s || s.length > 24 || !/^[A-Z0-9\-_\s]+$/.test(s)) return null
+    return s
+  }
+
   // 恢复上次会话的 UI 状态。逐字段白名单校验：存储损坏/缺字段/篡改值都退回默认。
   // localStorage 不可用（隐私模式、file:// 限制）时静默跳过，不影响功能。
   function loadPersistedState() {
@@ -76,10 +84,8 @@
     }
     if (!saved || typeof saved !== 'object') return
     if (saved.exchange === 'binance' || saved.exchange === 'okx') state.exchange = saved.exchange
-    if (typeof saved.symbol === 'string') {
-      const s = saved.symbol.trim().toUpperCase()
-      if (s && s.length <= 24) state.symbol = s
-    }
+    const restoredSymbol = normalizeSymbolInput(saved.symbol)
+    if (restoredSymbol) state.symbol = restoredSymbol
     if (
       saved.period &&
       PERIODS.some((p) => p.type === saved.period.type && p.span === saved.period.span)
@@ -263,9 +269,16 @@
     const chanState = mainView ? mainView.chanState : null
     let text = ''
     if (chanState) {
-      const finished = chanState.segments.filter((s) => s.finished).length
+      // 计数循环代替 filter().length：避免每次状态刷新分配两个临时数组
+      let finished = 0
+      for (let i = 0; i < chanState.segments.length; i++) {
+        if (chanState.segments[i].finished) finished++
+      }
       const divs = chanState.divergences || []
-      const strongDivs = divs.filter((d) => d.confirmed).length
+      let strongDivs = 0
+      for (let i = 0; i < divs.length; i++) {
+        if (divs[i].confirmed) strongDivs++
+      }
       text =
         state.symbol +
         ' · ' + currentExchange().label +
@@ -286,7 +299,7 @@
 
   // 绘制逻辑独立于页面与图表生命周期。
   const chartDrawing = window.chartDrawing.create({ COLORS, centerPalette, resolveView })
-  const { drawCenterRect, lowerBound, visibleInRange, fmtPrice, fillTextBackground, centerDirOf, drawChan, drawChanDiv } = chartDrawing
+  const { lowerBound, visibleInRange, fmtPrice, centerDirOf, drawChan, drawChanDiv } = chartDrawing
 
   // ---------------------------------------------------------------------------
   // 暗色主题
@@ -599,6 +612,9 @@
     if (!mainView || !mainView.chart) return
     resetChanCalc()
     mainView.symbol = state.symbol
+    // period 也必须同步：view.period 目前只在 createChartView 消费，但
+    // symbol 已同步而 period 不同步属于状态不一致，后续新增消费者会踩坑
+    mainView.period = state.period
     mainView.chart.setSymbol({ ticker: state.symbol })
     mainView.chart.setPeriod(state.period)
     refreshTabInfo()
@@ -675,9 +691,13 @@
     })
 
     $('#go').addEventListener('click', () => {
-      const v = $('#symbol').value.trim()
-      if (!v) return
-      state.symbol = v.toUpperCase()
+      // 与持久化恢复同一白名单口径：非法输入不触发请求，避免打到交易所 API
+      const s = normalizeSymbolInput($('#symbol').value)
+      if (!s) {
+        showToast('交易对格式无效：仅支持字母、数字、-、_，最长 24 个字符')
+        return
+      }
+      state.symbol = s
       $('#symbol').value = state.symbol
       saveState()
       refreshChart()
@@ -756,7 +776,28 @@
       shortName: '背驰面积',
       series: 'normal',
       figures: [],
-      calc: (dataList) => {
+      calc: (dataList, indicator) => {
+        // 复用 analyzer 增量维护的 MACD 柱序列（state.hists）：实时链路下
+        // MACD 只在 analyzer 内按 macdStep O(1)/tick 续算，这里不再每 tick
+        // 全量重算。chanState 缺失或长度不匹配（初始化时序）时回退全量。
+        const view = resolveView(indicator)
+        const chanState = view && view.chanState
+        const hists = chanState && chanState.hists
+        if (hists && hists.length === dataList.length) {
+          // { value } 映射数组也按引用 + 长度缓存：hists 只在尾部追加或末元素
+          // 原地更新（见 analyzer updateLast），增量同步尾部即可，避免每 tick
+          // 分配 n 个新对象。fullInit 会替换 hists 引用 → 缓存自动重建。
+          let cache = view.divHistCache
+          if (!cache || cache.src !== hists) {
+            cache = view.divHistCache = { src: hists, out: hists.map((h) => ({ value: h })) }
+            return cache.out
+          }
+          const out = cache.out
+          for (let i = out.length; i < hists.length; i++) out.push({ value: hists[i] })
+          out.length = hists.length
+          if (hists.length) out[hists.length - 1].value = hists[hists.length - 1]
+          return out
+        }
         const closes = dataList.map((d) => d.close)
         const hist = window.chanlun.macdHistogram(closes, MACD_PARAMS[0], MACD_PARAMS[1], MACD_PARAMS[2])
         return hist.map((h) => ({ value: h }))

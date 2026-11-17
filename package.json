@@ -7,9 +7,14 @@
   "scripts": {
     "test": "node tests/run.js",
     "test:browser": "node tests/browser-real-smoke.js",
-    "test:live": "LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js"
+    "test:browser:setup": "npm install --no-save --package-lock=false playwright@1.65.0 && npx playwright install chromium",
+    "test:live": "LIVE_NETWORK=1 node tests/run.js tests/live-network.test.js",
+    "lint": "eslint ."
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5"
   }
 }
